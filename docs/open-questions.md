@@ -1,16 +1,17 @@
-# Open Questions
+# 南京麻将规则待确认问题
 
-## Rules
+本文档仅记录 `docs/nanjing-mahjong-rules.md` 未覆盖或存在歧义、且需要人工确认的问题。不得自行添加推测结论。
 
-- Which Nanjing Mahjong rule variant should be implemented?
-- What scoring system should be used?
+## 模板
 
-## Product
+```markdown
+## 问题编号：Q-YYYYMMDD-001
 
-- Should the first version support reconnecting to an interrupted game?
-- Should games require login, guest names, or neither?
-
-## Technical
-
-- Where should production configuration be documented?
-- What deployment target should the project assume?
+- 发现日期：
+- 相关规则章节：
+- 具体场景：
+- 当前程序行为：
+- 待人工确认内容：
+- 最终结论：
+- 规则版本：
+```
