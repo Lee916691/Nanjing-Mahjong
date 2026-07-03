@@ -104,6 +104,206 @@ export function requiresFlowerReveal(tile: MahjongTile): tile is FlowerTile {
   return isFlowerTile(tile);
 }
 
+export interface TileWall {
+  readonly tiles: readonly MahjongTile[];
+}
+
+export type DrawTileFromWallResult =
+  | {
+      readonly status: 'drawn';
+      readonly tile: MahjongTile;
+      readonly wall: TileWall;
+    }
+  | {
+      readonly status: 'wall-exhausted';
+      readonly wall: TileWall;
+    };
+
+export type FlowerReplacementResult =
+  | {
+      readonly status: 'complete';
+      readonly wall: TileWall;
+      readonly hand: readonly OrdinaryHandTile[];
+      readonly flowers: readonly FlowerTile[];
+      readonly newlyRevealedFlowers: readonly FlowerTile[];
+      readonly replacementTiles: readonly OrdinaryHandTile[];
+    }
+  | {
+      readonly status: 'wall-exhausted';
+      readonly wall: TileWall;
+      readonly hand: readonly OrdinaryHandTile[];
+      readonly flowers: readonly FlowerTile[];
+      readonly newlyRevealedFlowers: readonly FlowerTile[];
+      readonly replacementTiles: readonly OrdinaryHandTile[];
+    };
+
+export interface SinglePlayerFlowerReplacementInput {
+  readonly wall: TileWall;
+  readonly hand: readonly MahjongTile[];
+  readonly flowers: readonly FlowerTile[];
+}
+
+export type SinglePlayerFlowerReplacementResult = FlowerReplacementResult;
+
+export type DrawnTileResolutionResult = FlowerReplacementResult;
+
+export function createTileWall(tiles: readonly MahjongTile[]): TileWall {
+  return { tiles: [...tiles] };
+}
+
+export function createNanjingMahjongTileWall(): TileWall {
+  return createTileWall(createNanjingMahjongDeck());
+}
+
+export function drawTileFromWallHead(wall: TileWall): DrawTileFromWallResult {
+  const tile = wall.tiles[0];
+
+  if (!tile) {
+    return createWallExhaustedResult(wall);
+  }
+
+  return {
+    status: 'drawn',
+    tile,
+    wall: createTileWall(wall.tiles.slice(1)),
+  };
+}
+
+export function drawTileFromWallTail(wall: TileWall): DrawTileFromWallResult {
+  const tile = wall.tiles.at(-1);
+
+  if (!tile) {
+    return createWallExhaustedResult(wall);
+  }
+
+  return {
+    status: 'drawn',
+    tile,
+    wall: createTileWall(wall.tiles.slice(0, -1)),
+  };
+}
+
+export function replaceFlowersForSinglePlayer(
+  input: SinglePlayerFlowerReplacementInput,
+): SinglePlayerFlowerReplacementResult {
+  const hand: OrdinaryHandTile[] = [];
+  const flowers: FlowerTile[] = [...input.flowers];
+  const newlyRevealedFlowers: FlowerTile[] = [];
+  let replacementCount = 0;
+
+  for (const tile of input.hand) {
+    if (isFlowerTile(tile)) {
+      flowers.push(tile);
+      newlyRevealedFlowers.push(tile);
+      replacementCount += 1;
+    } else {
+      hand.push(tile);
+    }
+  }
+
+  return drawReplacementTilesFromWall(
+    {
+      wall: createTileWall(input.wall.tiles),
+      hand,
+      flowers,
+      newlyRevealedFlowers,
+      replacementTiles: [],
+    },
+    replacementCount,
+  );
+}
+
+export function resolveDrawnTileWithFlowerReplacement(
+  hand: readonly OrdinaryHandTile[],
+  flowers: readonly FlowerTile[],
+  drawnTile: MahjongTile,
+  wall: TileWall,
+): DrawnTileResolutionResult {
+  if (isOrdinaryHandTile(drawnTile)) {
+    return {
+      status: 'complete',
+      wall: createTileWall(wall.tiles),
+      hand: [...hand, drawnTile],
+      flowers: [...flowers],
+      newlyRevealedFlowers: [],
+      replacementTiles: [],
+    };
+  }
+
+  return drawReplacementTilesFromWall(
+    {
+      wall: createTileWall(wall.tiles),
+      hand: [...hand],
+      flowers: [...flowers, drawnTile],
+      newlyRevealedFlowers: [drawnTile],
+      replacementTiles: [],
+    },
+    1,
+  );
+}
+
+function createWallExhaustedResult(wall: TileWall): DrawTileFromWallResult {
+  return {
+    status: 'wall-exhausted',
+    wall: createTileWall(wall.tiles),
+  };
+}
+
+interface FlowerReplacementState {
+  readonly wall: TileWall;
+  readonly hand: OrdinaryHandTile[];
+  readonly flowers: FlowerTile[];
+  readonly newlyRevealedFlowers: FlowerTile[];
+  readonly replacementTiles: OrdinaryHandTile[];
+}
+
+function drawReplacementTilesFromWall(
+  state: FlowerReplacementState,
+  replacementCount: number,
+): FlowerReplacementResult {
+  let wall = state.wall;
+  const hand = [...state.hand];
+  const flowers = [...state.flowers];
+  const newlyRevealedFlowers = [...state.newlyRevealedFlowers];
+  const replacementTiles = [...state.replacementTiles];
+  let remainingReplacements = replacementCount;
+
+  while (remainingReplacements > 0) {
+    const drawResult = drawTileFromWallTail(wall);
+
+    if (drawResult.status === 'wall-exhausted') {
+      return {
+        status: 'wall-exhausted',
+        wall: drawResult.wall,
+        hand,
+        flowers,
+        newlyRevealedFlowers,
+        replacementTiles,
+      };
+    }
+
+    wall = drawResult.wall;
+
+    if (isFlowerTile(drawResult.tile)) {
+      flowers.push(drawResult.tile);
+      newlyRevealedFlowers.push(drawResult.tile);
+      continue;
+    }
+
+    hand.push(drawResult.tile);
+    replacementTiles.push(drawResult.tile);
+    remainingReplacements -= 1;
+  }
+
+  return {
+    status: 'complete',
+    wall,
+    hand,
+    flowers,
+    newlyRevealedFlowers,
+    replacementTiles,
+  };
+}
 export function createNanjingMahjongDeck(): MahjongTile[] {
   return [...createNumberTiles(), ...createWindTiles(), ...createFlowerTiles()];
 }
