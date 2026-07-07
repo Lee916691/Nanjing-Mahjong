@@ -1,7 +1,7 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
 import type { DiscardAction, GameAction } from './actions';
-import type { RuleSetId } from './rules';
+import type { GameCreationOptions, StartGameOptions } from './options';
 import {
   FOUR_COPY_FLOWER_KINDS,
   FOUR_COPY_INDEXES,
@@ -25,10 +25,6 @@ import type {
   TileWall,
   WindTile,
 } from './state';
-
-export interface RuleSetOptions {
-  readonly ruleSetId?: RuleSetId;
-}
 
 export type {
   DiscardAction,
@@ -163,7 +159,7 @@ export function reactionReducer(state: GameState): GameState {
   return copyGameState(state);
 }
 
-export function createGameState(options: RuleSetOptions = {}): GameState {
+export function createGameState(options: GameCreationOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? DEFAULT_RULE_SET_ID);
 
   return {
@@ -176,7 +172,7 @@ export function createGameState(options: RuleSetOptions = {}): GameState {
   };
 }
 
-export function startGameState(state: GameState, options: RuleSetOptions = {}): GameState {
+export function startGameState(state: GameState, options: StartGameOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? state.ruleSetId ?? DEFAULT_RULE_SET_ID);
 
   return {

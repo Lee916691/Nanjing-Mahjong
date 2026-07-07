@@ -64,6 +64,7 @@ export type {
   ReactionAction,
   StartGameAction,
 } from './actions';
+export type { GameCreationOptions, RuleSetOptions, StartGameOptions } from './options';
 
 export {
   createNanjingMahjongDeck,
@@ -88,4 +89,4 @@ export {
   gameEngine,
   startGame,
 } from './engine';
-export type { GameEngine, RuleSetOptions } from './engine';
+export type { GameEngine } from './engine';

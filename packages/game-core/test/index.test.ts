@@ -30,11 +30,14 @@ import {
 } from '../src';
 import type {
   FlowerTile,
+  GameCreationOptions,
   GameAction,
   GameState,
   MahjongTile,
   OrdinaryHandTile,
   PlayerState,
+  RuleSetOptions,
+  StartGameOptions,
   TileId,
 } from '../src';
 
@@ -176,10 +179,13 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
   });
 
   it('exposes the engine as the public game state control layer', () => {
-    const createdGame = gameEngine.createGame();
+    const createOptions: GameCreationOptions = {};
+    const startOptions: StartGameOptions = {};
+    const legacyOptions: RuleSetOptions = createOptions;
+    const createdGame = gameEngine.createGame(legacyOptions);
 
     expect(createdGame).toEqual(createGame());
-    expect(gameEngine.startGame(createdGame).phase).toBe('playing');
+    expect(gameEngine.startGame(createdGame, startOptions).phase).toBe('playing');
   });
 
   it('applies DRAW_TILE through the same engine turn advancement path', () => {
