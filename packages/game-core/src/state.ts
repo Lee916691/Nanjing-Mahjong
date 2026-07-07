@@ -1,4 +1,5 @@
 import type { PlayerState } from './player';
+import type { RuleSetId } from './rules/RuleSet';
 
 export const GAME_CORE_MODULE = 'game-core';
 
@@ -90,6 +91,7 @@ export type Tile = MahjongTile;
 export type GamePhase = 'ready' | 'playing' | 'ended';
 
 export interface GameState {
+  ruleSetId: RuleSetId;
   players: PlayerState[];
   wall: Tile[];
   currentPlayerIndex: number;

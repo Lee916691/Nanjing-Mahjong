@@ -1,4 +1,6 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player';
+import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
+import type { RuleSetId } from './rules';
 import {
   FOUR_COPY_FLOWER_KINDS,
   FOUR_COPY_INDEXES,
@@ -23,16 +25,21 @@ import type {
   WindTile,
 } from './state';
 
+export interface RuleSetOptions {
+  readonly ruleSetId?: RuleSetId;
+}
+
+export type StartGameAction = { type: 'START_GAME'; ruleSetId?: RuleSetId };
 export type DrawAction = { type: 'DRAW_TILE' };
 export type DiscardAction =
   { type: 'DISCARD_TILE'; tileId: string } | { type: 'DISCARDED_TILE'; tileId: string };
 export type ReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
-export type GameAction = { type: 'START_GAME' } | DrawAction | DiscardAction | ReactionAction;
+export type GameAction = StartGameAction | DrawAction | DiscardAction | ReactionAction;
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'START_GAME':
-      return startGameState(state);
+      return startGameState(state, { ruleSetId: action.ruleSetId });
     case 'DRAW_TILE':
       return drawReducer(state);
     case 'DISCARD_TILE':
@@ -86,6 +93,7 @@ export function drawReducer(state: GameState): GameState {
   };
 
   return {
+    ruleSetId: state.ruleSetId,
     players,
     wall: [...drawResolution.wall.tiles],
     currentPlayerIndex:
@@ -140,6 +148,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
   };
 
   return {
+    ruleSetId: state.ruleSetId,
     players,
     wall: [...state.wall],
     currentPlayerIndex: nextPlayerIndex(state.currentPlayerIndex),
@@ -152,8 +161,11 @@ export function reactionReducer(state: GameState): GameState {
   return copyGameState(state);
 }
 
-export function createGameState(): GameState {
+export function createGameState(options: RuleSetOptions = {}): GameState {
+  const ruleSet = getRuleSet(options.ruleSetId ?? DEFAULT_RULE_SET_ID);
+
   return {
+    ruleSetId: ruleSet.id,
     players: createInitialPlayers(),
     wall: createNanjingMahjongDeck(),
     currentPlayerIndex: 0,
@@ -162,8 +174,11 @@ export function createGameState(): GameState {
   };
 }
 
-export function startGameState(state: GameState): GameState {
+export function startGameState(state: GameState, options: RuleSetOptions = {}): GameState {
+  const ruleSet = getRuleSet(options.ruleSetId ?? state.ruleSetId ?? DEFAULT_RULE_SET_ID);
+
   return {
+    ruleSetId: ruleSet.id,
     players: copyPlayers(state.players),
     wall: [...state.wall],
     currentPlayerIndex: state.currentPlayerIndex,
@@ -293,6 +308,7 @@ export function createNanjingMahjongDeck(): MahjongTile[] {
 
 function copyGameState(state: GameState): GameState {
   return {
+    ruleSetId: state.ruleSetId,
     players: copyPlayers(state.players),
     wall: [...state.wall],
     currentPlayerIndex: state.currentPlayerIndex,

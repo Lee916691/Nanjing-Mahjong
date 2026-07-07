@@ -45,6 +45,15 @@ export type {
   WindTileKind,
 } from './state';
 
+export {
+  DEFAULT_RULE_SET_ID,
+  NANJING_OPEN_RULE_SET,
+  RULE_SET_REGISTRY,
+  getRuleSet,
+  listRuleSets,
+} from './rules';
+export type { RuleSet, RuleSetId } from './rules';
+
 export { SEATS, createInitialPlayers } from './player';
 export type { PlayerState, Seat } from './player';
 
@@ -71,4 +80,4 @@ export {
   gameEngine,
   startGame,
 } from './engine';
-export type { GameAction, GameEngine } from './engine';
+export type { GameAction, GameEngine, RuleSetOptions } from './engine';

@@ -1,10 +1,10 @@
 import { createGameState, gameReducer } from './reducer';
-import type { GameAction } from './reducer';
+import type { GameAction, RuleSetOptions } from './reducer';
 import type { GameState } from './state';
 
 export interface GameEngine {
-  createGame(): GameState;
-  startGame(state: GameState): GameState;
+  createGame(options?: RuleSetOptions): GameState;
+  startGame(state: GameState, options?: RuleSetOptions): GameState;
   advanceTurn(state: GameState): GameState;
   applyAction(state: GameState, action: GameAction): GameState;
 }
@@ -16,16 +16,16 @@ export const gameEngine: GameEngine = {
   applyAction,
 };
 
-export function createGame(): GameState {
-  return createGameState();
+export function createGame(options: RuleSetOptions = {}): GameState {
+  return createGameState(options);
 }
 
-export function createInitialGame(): GameState {
-  return createGame();
+export function createInitialGame(options: RuleSetOptions = {}): GameState {
+  return createGame(options);
 }
 
-export function startGame(state: GameState): GameState {
-  return dispatch(state, { type: 'START_GAME' });
+export function startGame(state: GameState, options: RuleSetOptions = {}): GameState {
+  return dispatch(state, { type: 'START_GAME', ruleSetId: options.ruleSetId });
 }
 
 export function advanceTurn(state: GameState): GameState {
@@ -40,4 +40,4 @@ function dispatch(state: GameState, action: GameAction): GameState {
   return gameReducer(state, action);
 }
 
-export type { GameAction } from './reducer';
+export type { GameAction, RuleSetOptions } from './reducer';

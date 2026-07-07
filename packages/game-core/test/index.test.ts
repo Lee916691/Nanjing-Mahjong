@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_RULE_SET_ID,
   FLOWER_TILE_KINDS,
   NUMBER_TILE_SUITS,
   SEATS,
   advanceTurn,
   applyAction,
   WIND_TILE_KINDS,
+  NANJING_OPEN_RULE_SET,
   createInitialPlayers,
   createInitialGame,
   createGame,
@@ -15,10 +17,12 @@ import {
   drawTileFromWallHead,
   drawTileFromWallTail,
   gameEngine,
+  getRuleSet,
   isFlowerTile,
   isNumberTile,
   isOrdinaryHandTile,
   isWindTile,
+  listRuleSets,
   replaceFlowersForSinglePlayer,
   resolveDrawnTileWithFlowerReplacement,
   requiresFlowerReveal,
@@ -80,6 +84,7 @@ function tileIds(tiles: readonly MahjongTile[]): TileId[] {
 
 function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
   return {
+    ruleSetId: DEFAULT_RULE_SET_ID,
     players: createInitialPlayers(),
     wall: [...wall],
     currentPlayerIndex: 0,
@@ -87,6 +92,23 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
     phase: 'playing',
   };
 }
+describe('Nanjing Mahjong RuleSet registry', () => {
+  it('registers nanjing-open as the default RuleSet shell', () => {
+    const state = createGame();
+    const action: GameAction = { type: 'DRAW_TILE' };
+    const ruleSet = getRuleSet(DEFAULT_RULE_SET_ID);
+
+    expect(DEFAULT_RULE_SET_ID).toBe('nanjing-open');
+    expect(ruleSet).toBe(NANJING_OPEN_RULE_SET);
+    expect(ruleSet.id).toBe('nanjing-open');
+    expect(ruleSet.displayName).toBe('\u5357\u4eac\u9ebb\u5c06\u657e\u5f00\u5934');
+    expect(ruleSet.totalEffectiveDealerTurns).toBe(16);
+    expect(ruleSet.validateAction(state, action)).toBe(true);
+    expect(ruleSet.applyAction(state, action)).toBe(state);
+    expect(listRuleSets()).toEqual([NANJING_OPEN_RULE_SET]);
+  });
+});
+
 describe('Nanjing Mahjong player state', () => {
   it('defines the four seats in canonical action order', () => {
     expect(SEATS).toEqual(['east', 'south', 'west', 'north']);
@@ -132,6 +154,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(firstGame.players).not.toBe(secondGame.players);
     expect(firstGame.wall).not.toBe(secondGame.wall);
     expect(firstGame.players).toEqual(createInitialPlayers());
+    expect(firstGame.ruleSetId).toBe('nanjing-open');
     expect(firstGame.wall.map((tile) => tile.id)).toEqual(
       createNanjingMahjongDeck().map((tile) => tile.id),
     );
@@ -146,6 +169,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
 
     expect(playingGame).not.toBe(readyGame);
     expect(playingGame.phase).toBe('playing');
+    expect(playingGame.ruleSetId).toBe('nanjing-open');
     expect(playingGame.players).toEqual(readyGame.players);
     expect(playingGame.wall.map((tile) => tile.id)).toEqual(readyGame.wall.map((tile) => tile.id));
     expect(readyGame.phase).toBe('ready');
@@ -196,6 +220,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       hand: [discardedTile, keptTile],
     };
     const state: GameState = {
+      ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
       currentPlayerIndex: 0,
