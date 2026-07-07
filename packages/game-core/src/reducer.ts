@@ -1,5 +1,6 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
+import type { DiscardAction, GameAction } from './actions';
 import type { RuleSetId } from './rules';
 import {
   FOUR_COPY_FLOWER_KINDS,
@@ -29,12 +30,13 @@ export interface RuleSetOptions {
   readonly ruleSetId?: RuleSetId;
 }
 
-export type StartGameAction = { type: 'START_GAME'; ruleSetId?: RuleSetId };
-export type DrawAction = { type: 'DRAW_TILE' };
-export type DiscardAction =
-  { type: 'DISCARD_TILE'; tileId: string } | { type: 'DISCARDED_TILE'; tileId: string };
-export type ReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
-export type GameAction = StartGameAction | DrawAction | DiscardAction | ReactionAction;
+export type {
+  DiscardAction,
+  DrawAction,
+  GameAction,
+  ReactionAction,
+  StartGameAction,
+} from './actions';
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {

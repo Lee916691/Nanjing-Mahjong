@@ -1,4 +1,4 @@
-import type { GameAction } from '../reducer';
+import type { GameAction } from '../actions';
 import type { GameState } from '../state';
 
 export type RuleSetId = 'nanjing-open';

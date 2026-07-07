@@ -57,6 +57,14 @@ export type { RuleSet, RuleSetId } from './rules';
 export { SEATS, createInitialPlayers } from './player';
 export type { PlayerState, Seat } from './player';
 
+export type {
+  DiscardAction,
+  DrawAction,
+  GameAction,
+  ReactionAction,
+  StartGameAction,
+} from './actions';
+
 export {
   createNanjingMahjongDeck,
   createNanjingMahjongTileWall,
@@ -80,4 +88,4 @@ export {
   gameEngine,
   startGame,
 } from './engine';
-export type { GameAction, GameEngine, RuleSetOptions } from './engine';
+export type { GameEngine, RuleSetOptions } from './engine';

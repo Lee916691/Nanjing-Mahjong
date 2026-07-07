@@ -1,5 +1,6 @@
 import { createGameState, gameReducer } from './reducer';
-import type { GameAction, RuleSetOptions } from './reducer';
+import type { GameAction } from './actions';
+import type { RuleSetOptions } from './reducer';
 import type { GameState } from './state';
 
 export interface GameEngine {
@@ -40,4 +41,5 @@ function dispatch(state: GameState, action: GameAction): GameState {
   return gameReducer(state, action);
 }
 
-export type { GameAction, RuleSetOptions } from './reducer';
+export type { GameAction } from './actions';
+export type { RuleSetOptions } from './reducer';
