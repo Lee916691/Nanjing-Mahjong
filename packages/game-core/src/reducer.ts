@@ -1,4 +1,5 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player';
+import type { PlayerState } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
 import type { DiscardAction, GameAction } from './actions';
 import type { GameCreationOptions, StartGameOptions } from './options';
@@ -14,12 +15,15 @@ import {
 import type {
   DrawTileFromWallResult,
   DrawnTileResolutionResult,
+  FlowerKongKind,
   FlowerReplacementResult,
   FlowerTile,
   GameState,
   MahjongTile,
   NumberTile,
   OrdinaryHandTile,
+  PendingScoringEvent,
+  ScoringEventCreationStage,
   SinglePlayerFlowerReplacementInput,
   SinglePlayerFlowerReplacementResult,
   TileWall,
@@ -37,7 +41,11 @@ export type {
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'START_GAME':
-      return startGameState(state, { ruleSetId: action.ruleSetId });
+      return startGameState(state, {
+        ruleSetId: action.ruleSetId,
+        dealerIndex: action.dealerIndex,
+        dealerSeat: action.dealerSeat,
+      });
     case 'DRAW_TILE':
       return drawReducer(state);
     case 'DISCARD_TILE':
@@ -103,6 +111,7 @@ export function drawReducer(state: GameState): GameState {
       drawResolution.status === 'wall-exhausted' || drawResolution.wall.tiles.length === 0
         ? 'ended'
         : state.phase,
+    pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
   };
 }
 
@@ -152,6 +161,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     currentPlayerIndex: nextPlayerIndex(state.currentPlayerIndex),
     dealerIndex: state.dealerIndex,
     phase: state.phase,
+    pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
   };
 }
 
@@ -161,28 +171,225 @@ export function reactionReducer(state: GameState): GameState {
 
 export function createGameState(options: GameCreationOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? DEFAULT_RULE_SET_ID);
+  const dealerIndex = resolveDealerIndex(options, 0);
 
   return {
     ruleSetId: ruleSet.id,
-    players: createInitialPlayers(),
+    players: createInitialPlayers(dealerIndex),
     wall: createNanjingMahjongDeck(),
-    currentPlayerIndex: 0,
-    dealerIndex: 0,
+    currentPlayerIndex: dealerIndex,
+    dealerIndex,
     phase: 'ready',
+    pendingScoringEvents: [],
   };
 }
 
 export function startGameState(state: GameState, options: StartGameOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? state.ruleSetId ?? DEFAULT_RULE_SET_ID);
+  const dealerIndex = resolveDealerIndex(options, state.dealerIndex);
+
+  if (state.phase !== 'ready') {
+    return {
+      ...copyGameState(state),
+      ruleSetId: ruleSet.id,
+    };
+  }
+
+  return dealInitialHands({
+    ruleSetId: ruleSet.id,
+    players: createInitialPlayers(dealerIndex),
+    wall: [...state.wall],
+    currentPlayerIndex: dealerIndex,
+    dealerIndex,
+    phase: 'playing',
+    pendingScoringEvents: [],
+  });
+}
+
+function dealInitialHands(state: GameState): GameState {
+  let wall = createTileWall(state.wall);
+  const players = copyPlayers(state.players);
+  const rawHands = players.map((): MahjongTile[] => []);
+  const targetCounts = players.map((_, index) => (index === state.dealerIndex ? 14 : 13));
+
+  while (targetCounts.some((targetCount, index) => rawHands[index]?.length !== targetCount)) {
+    for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
+      const targetCount = targetCounts[playerIndex];
+
+      if (targetCount === undefined) {
+        throw new Error(`Invalid player index ${playerIndex}`);
+      }
+
+      if ((rawHands[playerIndex]?.length ?? 0) >= targetCount) {
+        continue;
+      }
+
+      const drawResult = drawTileFromWallHead(wall);
+
+      if (drawResult.status === 'wall-exhausted') {
+        return finishInitialDealFromRawHands(state, players, rawHands, drawResult.wall, 'ended');
+      }
+
+      rawHands[playerIndex]?.push(drawResult.tile);
+      wall = drawResult.wall;
+    }
+  }
+
+  let pendingScoringEvents: PendingScoringEvent[] = [];
+
+  for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
+    const player = players[playerIndex];
+
+    if (!player) {
+      throw new Error(`Invalid player index ${playerIndex}`);
+    }
+
+    pendingScoringEvents = appendFlowerKongEvents(
+      pendingScoringEvents,
+      player,
+      playerIndex,
+      rawHands[playerIndex]?.filter(isFlowerTile) ?? [],
+      'initial-deal',
+    );
+  }
+
+  let phase: GameState['phase'] = 'playing';
+
+  for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
+    const player = players[playerIndex];
+    const rawHand = rawHands[playerIndex];
+
+    if (!player || !rawHand) {
+      throw new Error(`Invalid player index ${playerIndex}`);
+    }
+
+    const replacement = replaceFlowersForSinglePlayer({
+      wall,
+      hand: rawHand,
+      flowers: [],
+    });
+
+    players[playerIndex] = {
+      ...player,
+      hand: [...replacement.hand],
+      flowers: [...replacement.flowers],
+    };
+    wall = replacement.wall;
+    pendingScoringEvents = appendFlowerKongEvents(
+      pendingScoringEvents,
+      players[playerIndex],
+      playerIndex,
+      replacement.flowers,
+      'initial-flower-replacement',
+    );
+
+    if (replacement.status === 'wall-exhausted') {
+      phase = 'ended';
+      break;
+    }
+  }
 
   return {
-    ruleSetId: ruleSet.id,
-    players: copyPlayers(state.players),
-    wall: [...state.wall],
-    currentPlayerIndex: state.currentPlayerIndex,
-    dealerIndex: state.dealerIndex,
-    phase: state.phase === 'ready' ? 'playing' : state.phase,
+    ...state,
+    players,
+    wall: [...wall.tiles],
+    currentPlayerIndex: state.dealerIndex,
+    phase,
+    pendingScoringEvents,
   };
+}
+
+function finishInitialDealFromRawHands(
+  state: GameState,
+  players: PlayerState[],
+  rawHands: readonly MahjongTile[][],
+  wall: TileWall,
+  phase: GameState['phase'],
+): GameState {
+  return {
+    ...state,
+    players: players.map((player, index) => ({
+      ...player,
+      hand: rawHands[index]?.filter(isOrdinaryHandTile) ?? [],
+      flowers: rawHands[index]?.filter(isFlowerTile) ?? [],
+    })),
+    wall: [...wall.tiles],
+    currentPlayerIndex: state.dealerIndex,
+    phase,
+    pendingScoringEvents: [],
+  };
+}
+
+function playerOrderFromDealer(dealerIndex: number): number[] {
+  return SEATS.map((_, offset) => (dealerIndex + offset) % SEATS.length);
+}
+
+function appendFlowerKongEvents(
+  events: readonly PendingScoringEvent[],
+  player: PlayerState,
+  playerIndex: number,
+  flowers: readonly FlowerTile[],
+  createdDuring: ScoringEventCreationStage,
+): PendingScoringEvent[] {
+  const nextEvents = [...events];
+
+  for (const kind of findFlowerKongKinds(flowers)) {
+    const alreadyRecorded = nextEvents.some(
+      (event) => event.playerIndex === playerIndex && event.kind === kind,
+    );
+
+    if (!alreadyRecorded) {
+      nextEvents.push({
+        type: 'flower-kong-created',
+        playerIndex,
+        seat: player.seat,
+        kind,
+        createdDuring,
+        status: 'pending',
+      });
+    }
+  }
+
+  return nextEvents;
+}
+
+function findFlowerKongKinds(flowers: readonly FlowerTile[]): FlowerKongKind[] {
+  const flowerKinds = new Set(flowers.map((tile) => tile.flower));
+  const kinds: FlowerKongKind[] = [];
+
+  for (const flower of FOUR_COPY_FLOWER_KINDS) {
+    if (flowers.filter((tile) => tile.flower === flower).length === FOUR_COPY_INDEXES.length) {
+      kinds.push(flower);
+    }
+  }
+
+  if (PLANT_FLOWER_KINDS.every((flower) => flowerKinds.has(flower))) {
+    kinds.push('plum-orchid-bamboo-chrysanthemum');
+  }
+
+  if (SEASON_FLOWER_KINDS.every((flower) => flowerKinds.has(flower))) {
+    kinds.push('spring-summer-autumn-winter');
+  }
+
+  return kinds;
+}
+
+function resolveDealerIndex(options: StartGameOptions, fallbackDealerIndex: number): number {
+  const seatDealerIndex =
+    options.dealerSeat === undefined ? undefined : SEATS.indexOf(options.dealerSeat);
+  const dealerIndex = options.dealerIndex ?? seatDealerIndex ?? fallbackDealerIndex;
+
+  if (options.dealerIndex !== undefined && seatDealerIndex !== undefined) {
+    if (options.dealerIndex !== seatDealerIndex) {
+      throw new Error('dealerIndex and dealerSeat must refer to the same player');
+    }
+  }
+
+  if (!Number.isInteger(dealerIndex) || dealerIndex < 0 || dealerIndex >= SEATS.length) {
+    throw new Error(`Invalid dealer index ${dealerIndex}`);
+  }
+
+  return dealerIndex;
 }
 
 export function isNumberTile(tile: MahjongTile): tile is NumberTile {
@@ -312,6 +519,7 @@ function copyGameState(state: GameState): GameState {
     currentPlayerIndex: state.currentPlayerIndex,
     dealerIndex: state.dealerIndex,
     phase: state.phase,
+    pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
   };
 }
 

@@ -12,14 +12,14 @@ export interface PlayerState {
   readonly isDealer: boolean;
 }
 
-export function createInitialPlayers(): PlayerState[] {
+export function createInitialPlayers(dealerIndex = 0): PlayerState[] {
   return SEATS.map((seat, index): PlayerState => ({
     id: index,
     seat,
     hand: [],
     flowers: [],
     discardPile: [],
-    isDealer: seat === 'east',
+    isDealer: index === dealerIndex,
   }));
 }
 

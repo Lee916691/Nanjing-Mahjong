@@ -93,6 +93,7 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
     currentPlayerIndex: 0,
     dealerIndex: 0,
     phase: 'playing',
+    pendingScoringEvents: [],
   };
 }
 describe('Nanjing Mahjong RuleSet registry', () => {
@@ -164,18 +165,271 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(firstGame.currentPlayerIndex).toBe(0);
     expect(firstGame.dealerIndex).toBe(0);
     expect(firstGame.phase).toBe('ready');
+    expect(firstGame.pendingScoringEvents).toEqual([]);
   });
 
-  it('starts a ready game without dealing or resolving player actions', () => {
+  it('starts a ready game by dealing complete ordinary opening hands', () => {
     const readyGame = createInitialGame();
     const playingGame = startGame(readyGame);
 
     expect(playingGame).not.toBe(readyGame);
     expect(playingGame.phase).toBe('playing');
     expect(playingGame.ruleSetId).toBe('nanjing-open');
-    expect(playingGame.players).toEqual(readyGame.players);
-    expect(playingGame.wall.map((tile) => tile.id)).toEqual(readyGame.wall.map((tile) => tile.id));
+    expect(playingGame.players.map((player) => player.hand)).not.toEqual(
+      readyGame.players.map((player) => player.hand),
+    );
+    expect(playingGame.players.map((player) => player.hand.length)).toEqual([14, 13, 13, 13]);
+    expect(playingGame.players.every((player) => player.hand.every(isOrdinaryHandTile))).toBe(true);
+    expect(playingGame.players.every((player) => player.flowers.length === 0)).toBe(true);
+    expect(playingGame.wall).toHaveLength(91);
+    expect(playingGame.currentPlayerIndex).toBe(0);
+    expect(playingGame.dealerIndex).toBe(0);
+    expect(playingGame.pendingScoringEvents).toEqual([]);
     expect(readyGame.phase).toBe('ready');
+    expect(readyGame.players.every((player) => player.hand.length === 0)).toBe(true);
+  });
+
+  it('moves flowers from the initial deal into the flower area and replaces from the tail', () => {
+    const deck = createNanjingMahjongDeck();
+    const dealtFlower = flowerTileById(deck, 'flower-red-center-1');
+    const replacementTile = ordinaryTileById(deck, 'wind-north-1');
+    const leftoverTile = ordinaryTileById(deck, 'wind-north-2');
+    const rawOrdinaryTiles = deck
+      .filter(isOrdinaryHandTile)
+      .filter((tile) => tile.id !== replacementTile.id && tile.id !== leftoverTile.id)
+      .slice(0, 52);
+    const readyGame = {
+      ...createGame(),
+      wall: [dealtFlower, ...rawOrdinaryTiles, leftoverTile, replacementTile],
+    };
+    const playingGame = startGame(readyGame);
+    const dealer = playerAt(playingGame, 0);
+
+    expect(tileIds(dealer.flowers)).toEqual(['flower-red-center-1']);
+    expect(dealer.hand).toHaveLength(14);
+    expect(dealer.hand.every(isOrdinaryHandTile)).toBe(true);
+    expect(tileIds(dealer.hand)).toContain('wind-north-1');
+    expect(tileIds(playingGame.wall)).toEqual(['wind-north-2']);
+    expect(playingGame.phase).toBe('playing');
+  });
+
+  it('runs initial flower replacement in dealer, next, opposite, upper order', () => {
+    const deck = createNanjingMahjongDeck();
+    const firstFourRawTiles = [
+      flowerTileById(deck, 'flower-red-center-1'),
+      flowerTileById(deck, 'flower-fortune-1'),
+      flowerTileById(deck, 'flower-white-board-1'),
+      flowerTileById(deck, 'season-spring-1'),
+    ];
+    const eastReplacementTile = ordinaryTileById(deck, 'wind-east-1');
+    const southReplacementTile = ordinaryTileById(deck, 'wind-south-1');
+    const westReplacementTile = ordinaryTileById(deck, 'wind-west-1');
+    const northReplacementTile = ordinaryTileById(deck, 'wind-north-1');
+    const replacementTiles = [
+      eastReplacementTile,
+      southReplacementTile,
+      westReplacementTile,
+      northReplacementTile,
+    ];
+    const leftoverTile = ordinaryTileById(deck, 'wind-east-2');
+    const excludedIds = new Set<TileId>([
+      ...replacementTiles.map((tile) => tile.id),
+      leftoverTile.id,
+    ]);
+    const rawOrdinaryTiles = deck
+      .filter(isOrdinaryHandTile)
+      .filter((tile) => !excludedIds.has(tile.id))
+      .slice(0, 49);
+    const readyGame = {
+      ...createGame(),
+      wall: [
+        ...firstFourRawTiles,
+        ...rawOrdinaryTiles,
+        leftoverTile,
+        northReplacementTile,
+        westReplacementTile,
+        southReplacementTile,
+        eastReplacementTile,
+      ],
+    };
+    const playingGame = startGame(readyGame);
+
+    expect(tileIds(playerAt(playingGame, 0).hand)).toContain('wind-east-1');
+    expect(tileIds(playerAt(playingGame, 1).hand)).toContain('wind-south-1');
+    expect(tileIds(playerAt(playingGame, 2).hand)).toContain('wind-west-1');
+    expect(tileIds(playerAt(playingGame, 3).hand)).toContain('wind-north-1');
+    expect(tileIds(playingGame.wall)).toEqual(['wind-east-2']);
+  });
+
+  it('runs initial flower replacement from a south dealer in logical seat order', () => {
+    const deck = createNanjingMahjongDeck();
+    const firstFourRawTiles = [
+      flowerTileById(deck, 'flower-red-center-1'),
+      flowerTileById(deck, 'flower-fortune-1'),
+      flowerTileById(deck, 'flower-white-board-1'),
+      flowerTileById(deck, 'season-spring-1'),
+    ];
+    const southReplacementTile = ordinaryTileById(deck, 'wind-south-1');
+    const westReplacementTile = ordinaryTileById(deck, 'wind-west-1');
+    const northReplacementTile = ordinaryTileById(deck, 'wind-north-1');
+    const eastReplacementTile = ordinaryTileById(deck, 'wind-east-1');
+    const replacementTiles = [
+      southReplacementTile,
+      westReplacementTile,
+      northReplacementTile,
+      eastReplacementTile,
+    ];
+    const leftoverTile = ordinaryTileById(deck, 'wind-east-2');
+    const excludedIds = new Set<TileId>([
+      ...replacementTiles.map((tile) => tile.id),
+      leftoverTile.id,
+    ]);
+    const rawOrdinaryTiles = deck
+      .filter(isOrdinaryHandTile)
+      .filter((tile) => !excludedIds.has(tile.id))
+      .slice(0, 49);
+    const readyGame = {
+      ...createGame(),
+      wall: [
+        ...firstFourRawTiles,
+        ...rawOrdinaryTiles,
+        leftoverTile,
+        eastReplacementTile,
+        northReplacementTile,
+        westReplacementTile,
+        southReplacementTile,
+      ],
+    };
+    const playingGame = startGame(readyGame, { dealerSeat: 'south' });
+
+    expect(playingGame.dealerIndex).toBe(1);
+    expect(playingGame.currentPlayerIndex).toBe(1);
+    expect(tileIds(playerAt(playingGame, 1).hand)).toContain('wind-south-1');
+    expect(tileIds(playerAt(playingGame, 2).hand)).toContain('wind-west-1');
+    expect(tileIds(playerAt(playingGame, 3).hand)).toContain('wind-north-1');
+    expect(tileIds(playerAt(playingGame, 0).hand)).toContain('wind-east-1');
+    expect(tileIds(playingGame.wall)).toEqual(['wind-east-2']);
+  });
+  it('keeps east as the default dealer for legacy startGame calls', () => {
+    const playingGame = startGame(createGame());
+
+    expect(playingGame.dealerIndex).toBe(0);
+    expect(playingGame.currentPlayerIndex).toBe(0);
+    expect(playingGame.players.map((player) => player.isDealer)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('supports explicit dealerSeat and dealerIndex options', () => {
+    const westDealerGame = startGame(createGame(), { dealerSeat: 'west' });
+    const northDealerGame = startGame(createGame(), { dealerIndex: 3 });
+
+    expect(westDealerGame.dealerIndex).toBe(2);
+    expect(westDealerGame.currentPlayerIndex).toBe(2);
+    expect(westDealerGame.players.map((player) => player.hand.length)).toEqual([13, 13, 14, 13]);
+    expect(westDealerGame.players.map((player) => player.isDealer)).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
+    expect(northDealerGame.dealerIndex).toBe(3);
+    expect(northDealerGame.currentPlayerIndex).toBe(3);
+    expect(northDealerGame.players.map((player) => player.hand.length)).toEqual([13, 13, 13, 14]);
+  });
+
+  it('accepts matching dealerSeat and dealerIndex options', () => {
+    const playingGame = startGame(createGame(), { dealerSeat: 'west', dealerIndex: 2 });
+
+    expect(playingGame.dealerIndex).toBe(2);
+    expect(playingGame.currentPlayerIndex).toBe(2);
+    expect(playingGame.players.map((player) => player.isDealer)).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it('rejects conflicting dealerSeat and dealerIndex options', () => {
+    expect(() => startGame(createGame(), { dealerSeat: 'west', dealerIndex: 1 })).toThrow(
+      'dealerIndex and dealerSeat must refer to the same player',
+    );
+  });
+  it('records initial flower kong events as pending scoring without changing scores', () => {
+    const deck = createNanjingMahjongDeck();
+    const redCenters = [
+      flowerTileById(deck, 'flower-red-center-1'),
+      flowerTileById(deck, 'flower-red-center-2'),
+      flowerTileById(deck, 'flower-red-center-3'),
+      flowerTileById(deck, 'flower-red-center-4'),
+    ];
+    const ordinaryTiles = deck.filter(isOrdinaryHandTile);
+    const rawOrdinaryTiles = [...ordinaryTiles.slice(0, 49)];
+    const replacementTiles = ordinaryTiles.slice(49, 53);
+    const leftoverTile = ordinaryTiles[53];
+    const fallbackOrdinaryTile = ordinaryTiles[0];
+    const [
+      firstReplacementTile,
+      secondReplacementTile,
+      thirdReplacementTile,
+      fourthReplacementTile,
+    ] = replacementTiles;
+    const rawTiles: MahjongTile[] = [];
+    const redCenterPositions = new Set([0, 4, 8, 12]);
+
+    if (
+      !leftoverTile ||
+      !fallbackOrdinaryTile ||
+      !firstReplacementTile ||
+      !secondReplacementTile ||
+      !thirdReplacementTile ||
+      !fourthReplacementTile
+    ) {
+      throw new Error('Missing ordinary tiles for flower kong test');
+    }
+
+    for (let index = 0; index < 53; index += 1) {
+      rawTiles.push(
+        redCenterPositions.has(index)
+          ? (redCenters.shift() ?? rawOrdinaryTiles.shift() ?? fallbackOrdinaryTile)
+          : (rawOrdinaryTiles.shift() ?? fallbackOrdinaryTile),
+      );
+    }
+
+    const readyGame = {
+      ...createGame(),
+      wall: [
+        ...rawTiles,
+        leftoverTile,
+        fourthReplacementTile,
+        thirdReplacementTile,
+        secondReplacementTile,
+        firstReplacementTile,
+      ],
+    };
+    const playingGame = startGame(readyGame);
+
+    expect(playingGame.pendingScoringEvents).toEqual([
+      {
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        seat: 'east',
+        kind: 'red-center',
+        createdDuring: 'initial-deal',
+        status: 'pending',
+      },
+    ]);
+    expect(tileIds(playerAt(playingGame, 0).flowers)).toEqual([
+      'flower-red-center-1',
+      'flower-red-center-2',
+      'flower-red-center-3',
+      'flower-red-center-4',
+    ]);
+    expect('score' in playerAt(playingGame, 0)).toBe(false);
   });
 
   it('exposes the engine as the public game state control layer', () => {
@@ -232,6 +486,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       currentPlayerIndex: 0,
       dealerIndex: 0,
       phase: 'playing',
+      pendingScoringEvents: [],
     };
     const action: GameAction = { type: 'DISCARD_TILE', tileId: discardedTile.id };
     const nextState = applyAction(state, action);
@@ -247,7 +502,14 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
   });
 
   it('rotates four players after ordinary head draws', () => {
-    let state = startGame(createInitialGame());
+    const deck = createNanjingMahjongDeck();
+    let state = createPlayingGameWithWall([
+      ordinaryTileById(deck, 'wan-1-1'),
+      ordinaryTileById(deck, 'wan-1-2'),
+      ordinaryTileById(deck, 'wan-1-3'),
+      ordinaryTileById(deck, 'wan-1-4'),
+      ordinaryTileById(deck, 'wan-2-1'),
+    ]);
 
     state = advanceTurn(state);
     expect(state.currentPlayerIndex).toBe(1);
@@ -269,7 +531,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       ['wan-1-4'],
     ]);
     expect(state.players.every((player) => player.flowers.length === 0)).toBe(true);
-    expect(state.wall).toHaveLength(140);
+    expect(tileIds(state.wall)).toEqual(['wan-2-1']);
     expect(state.phase).toBe('playing');
   });
 

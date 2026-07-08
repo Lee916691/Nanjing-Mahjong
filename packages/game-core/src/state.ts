@@ -90,6 +90,22 @@ export type Tile = MahjongTile;
 
 export type GamePhase = 'ready' | 'playing' | 'ended';
 
+export type FlowerKongKind =
+  FourCopyFlowerKind | 'plum-orchid-bamboo-chrysanthemum' | 'spring-summer-autumn-winter';
+
+export type ScoringEventCreationStage = 'initial-deal' | 'initial-flower-replacement';
+
+export interface PendingFlowerKongScoringEvent {
+  readonly type: 'flower-kong-created';
+  readonly playerIndex: number;
+  readonly seat: PlayerState['seat'];
+  readonly kind: FlowerKongKind;
+  readonly createdDuring: ScoringEventCreationStage;
+  readonly status: 'pending';
+}
+
+export type PendingScoringEvent = PendingFlowerKongScoringEvent;
+
 export interface GameState {
   ruleSetId: RuleSetId;
   players: PlayerState[];
@@ -97,6 +113,7 @@ export interface GameState {
   currentPlayerIndex: number;
   dealerIndex: number;
   phase: GamePhase;
+  pendingScoringEvents: readonly PendingScoringEvent[];
 }
 
 export interface TileWall {

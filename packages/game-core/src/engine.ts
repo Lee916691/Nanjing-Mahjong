@@ -26,7 +26,12 @@ export function createInitialGame(options: GameCreationOptions = {}): GameState 
 }
 
 export function startGame(state: GameState, options: StartGameOptions = {}): GameState {
-  return dispatch(state, { type: 'START_GAME', ruleSetId: options.ruleSetId });
+  return dispatch(state, {
+    type: 'START_GAME',
+    ruleSetId: options.ruleSetId,
+    dealerIndex: options.dealerIndex,
+    dealerSeat: options.dealerSeat,
+  });
 }
 
 export function advanceTurn(state: GameState): GameState {

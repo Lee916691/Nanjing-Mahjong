@@ -1,6 +1,12 @@
+import type { Seat } from './player';
 import type { RuleSetId } from './rules/RuleSet';
 
-export type StartGameAction = { type: 'START_GAME'; ruleSetId?: RuleSetId };
+export type StartGameAction = {
+  type: 'START_GAME';
+  ruleSetId?: RuleSetId;
+  dealerIndex?: number;
+  dealerSeat?: Seat;
+};
 export type DrawAction = { type: 'DRAW_TILE' };
 export type DiscardAction =
   { type: 'DISCARD_TILE'; tileId: string } | { type: 'DISCARDED_TILE'; tileId: string };
