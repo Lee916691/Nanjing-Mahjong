@@ -16,6 +16,7 @@ import {
   createNanjingMahjongDeck,
   createNanjingMahjongTileWall,
   createTileWall,
+  completeCurrentHand,
   drawTileFromWallHead,
   drawTileFromWallTail,
   gameEngine,
@@ -25,9 +26,11 @@ import {
   isOrdinaryHandTile,
   isWindTile,
   listRuleSets,
+  prepareNextHand,
   replaceFlowersForSinglePlayer,
   resolveDrawnTileWithFlowerReplacement,
   requiresFlowerReveal,
+  startCurrentHand,
   startGame,
   startMatch,
 } from '../src';
@@ -252,6 +255,150 @@ describe('Nanjing Mahjong match state', () => {
       },
     ]);
     expect('score' in playerAt(startedMatch.currentHand, 0)).toBe(false);
+
+    const completedMatch = completeCurrentHand(startedMatch, {
+      dealerTransition: 'stay',
+      reason: 'draw',
+    });
+
+    expect(completedMatch.currentHand.pendingScoringEvents).toEqual(
+      startedMatch.currentHand.pendingScoringEvents,
+    );
+    expect(completedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+  });
+
+  it('completes a hand with dealer advance without settling scores', () => {
+    const startedMatch = startMatch(createMatch());
+    const completedMatch = completeCurrentHand(startedMatch, {
+      dealerTransition: 'advance',
+      reason: 'normal-dealer-advance',
+    });
+
+    expect(completedMatch.completedHands).toEqual([
+      {
+        handIndex: 0,
+        dealerIndex: 0,
+        effectiveDealerTurn: 1,
+        result: 'not-scored-yet',
+        dealerTransition: 'advance',
+        reason: 'normal-dealer-advance',
+        pendingScoringEventCount: 0,
+      },
+    ]);
+    expect(completedMatch.dealerIndex).toBe(1);
+    expect(completedMatch.effectiveDealerTurn).toBe(2);
+    expect(completedMatch.currentHandStatus).toBe('completed');
+    expect(completedMatch.status).toBe('playing');
+    expect(completedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(completedMatch.currentHand.dealerIndex).toBe(completedMatch.dealerIndex);
+    expect(completedMatch.currentHand.players.map((player) => player.isDealer)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it('completes a hand with dealer stay without advancing effective dealer turn', () => {
+    const startedMatch = startMatch(createMatch({ dealerIndex: 2 }));
+    const completedMatch = completeCurrentHand(startedMatch, {
+      dealerTransition: 'stay',
+      reason: 'dealer-win',
+    });
+
+    expect(completedMatch.completedHands).toEqual([
+      {
+        handIndex: 0,
+        dealerIndex: 2,
+        effectiveDealerTurn: 1,
+        result: 'not-scored-yet',
+        dealerTransition: 'stay',
+        reason: 'dealer-win',
+        pendingScoringEventCount: 0,
+      },
+    ]);
+    expect(completedMatch.dealerIndex).toBe(2);
+    expect(completedMatch.effectiveDealerTurn).toBe(1);
+    expect(completedMatch.currentHandStatus).toBe('completed');
+    expect(completedMatch.status).toBe('playing');
+    expect(completedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+  });
+
+  it('handles the 16th effective dealer turn from caller-provided completion', () => {
+    const finalAdvanceMatch = {
+      ...startMatch(createMatch()),
+      effectiveDealerTurn: 16,
+      isFinalDealerTurn: true,
+    };
+    const finalStayMatch = {
+      ...startMatch(createMatch()),
+      effectiveDealerTurn: 16,
+      isFinalDealerTurn: true,
+    };
+
+    const advanced = completeCurrentHand(finalAdvanceMatch, {
+      dealerTransition: 'advance',
+      reason: 'normal-dealer-advance',
+    });
+    const stayed = completeCurrentHand(finalStayMatch, {
+      dealerTransition: 'stay',
+      reason: 'final-turn-continuation',
+    });
+
+    expect(advanced.status).toBe('completed');
+    expect(advanced.effectiveDealerTurn).toBe(16);
+    expect(advanced.dealerIndex).toBe(1);
+    expect(advanced.currentHandStatus).toBe('completed');
+    expect(stayed.status).toBe('playing');
+    expect(stayed.effectiveDealerTurn).toBe(16);
+    expect(stayed.dealerIndex).toBe(0);
+    expect(stayed.currentHandStatus).toBe('completed');
+  });
+
+  it('prepares the next ready hand after a completed hand', () => {
+    const completedMatch = completeCurrentHand(startMatch(createMatch({ dealerIndex: 3 })), {
+      dealerTransition: 'advance',
+      reason: 'normal-dealer-advance',
+    });
+    const nextHandMatch = prepareNextHand(completedMatch);
+
+    expect(nextHandMatch.status).toBe('playing');
+    expect(nextHandMatch.currentHandStatus).toBe('not-started');
+    expect(nextHandMatch.currentHandIndex).toBe(1);
+    expect(nextHandMatch.dealerIndex).toBe(0);
+    expect(nextHandMatch.currentHand.phase).toBe('ready');
+    expect(nextHandMatch.currentHand.dealerIndex).toBe(nextHandMatch.dealerIndex);
+    expect(nextHandMatch.currentHand.currentPlayerIndex).toBe(nextHandMatch.dealerIndex);
+    expect(nextHandMatch.currentHand.players.map((player) => player.isDealer)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(nextHandMatch.currentHand.players.map((player) => player.hand.length)).toEqual([
+      0, 0, 0, 0,
+    ]);
+  });
+
+  it('starts the prepared current hand without changing cumulative scores', () => {
+    const completedMatch = completeCurrentHand(startMatch(createMatch()), {
+      dealerTransition: 'stay',
+      reason: 'dealer-win',
+    });
+    const readyMatch = prepareNextHand(completedMatch);
+    const startedMatch = startCurrentHand(readyMatch);
+
+    expect(startedMatch.status).toBe('playing');
+    expect(startedMatch.currentHandStatus).toBe('playing');
+    expect(startedMatch.currentHand.phase).toBe('playing');
+    expect(startedMatch.currentHand.dealerIndex).toBe(startedMatch.dealerIndex);
+    expect(startedMatch.currentHand.players.map((player) => player.hand.length)).toEqual([
+      14, 13, 13, 13,
+    ]);
+    expect(
+      startedMatch.currentHand.players.every((player) => player.hand.every(isOrdinaryHandTile)),
+    ).toBe(true);
+    expect(startedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
   });
 });
 describe('Nanjing Mahjong player state', () => {

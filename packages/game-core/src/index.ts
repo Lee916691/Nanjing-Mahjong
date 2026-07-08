@@ -95,11 +95,21 @@ export {
 } from './engine';
 export type { GameEngine } from './engine';
 
-export { createInitialHandForMatch, createMatch, startMatch } from './match';
+export {
+  completeCurrentHand,
+  createInitialHandForMatch,
+  createMatch,
+  prepareNextHand,
+  startCurrentHand,
+  startMatch,
+} from './match';
 export type {
   CompletedHandResult,
+  DealerTransition,
   CompletedHandSummary,
   CreateInitialHandForMatchOptions,
+  HandCompletion,
+  HandCompletionReason,
   HandStatus,
   MatchCreationOptions,
   MatchState,
