@@ -94,3 +94,15 @@ export {
   startGame,
 } from './engine';
 export type { GameEngine } from './engine';
+
+export { createInitialHandForMatch, createMatch, startMatch } from './match';
+export type {
+  CompletedHandResult,
+  CompletedHandSummary,
+  CreateInitialHandForMatchOptions,
+  HandStatus,
+  MatchCreationOptions,
+  MatchState,
+  MatchStatus,
+  StartMatchOptions,
+} from './match';

@@ -10,7 +10,9 @@ import {
   NANJING_OPEN_RULE_SET,
   createInitialPlayers,
   createInitialGame,
+  createInitialHandForMatch,
   createGame,
+  createMatch,
   createNanjingMahjongDeck,
   createNanjingMahjongTileWall,
   createTileWall,
@@ -27,6 +29,7 @@ import {
   resolveDrawnTileWithFlowerReplacement,
   requiresFlowerReveal,
   startGame,
+  startMatch,
 } from '../src';
 import type {
   FlowerTile,
@@ -34,6 +37,7 @@ import type {
   GameAction,
   GameState,
   MahjongTile,
+  MatchState,
   OrdinaryHandTile,
   PlayerState,
   RuleSetOptions,
@@ -113,6 +117,143 @@ describe('Nanjing Mahjong RuleSet registry', () => {
   });
 });
 
+describe('Nanjing Mahjong match state', () => {
+  it('creates a default nanjing-open match shell with 16 dealer turns and initial scores', () => {
+    const match: MatchState = createMatch();
+
+    expect(match.ruleSetId).toBe('nanjing-open');
+    expect(match.status).toBe('waiting');
+    expect(match.totalEffectiveDealerTurns).toBe(16);
+    expect(match.effectiveDealerTurn).toBe(1);
+    expect(match.dealerIndex).toBe(0);
+    expect(match.currentHandIndex).toBe(0);
+    expect(match.currentHandStatus).toBe('not-started');
+    expect(match.currentHand.ruleSetId).toBe('nanjing-open');
+    expect(match.currentHand.phase).toBe('ready');
+    expect(match.currentHand.dealerIndex).toBe(match.dealerIndex);
+    expect(match.currentHand.currentPlayerIndex).toBe(match.dealerIndex);
+    expect(match.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(match.completedHands).toEqual([]);
+    expect(match.isFinalDealerTurn).toBe(false);
+  });
+
+  it('creates the first ready hand for a match without starting legacy game flow', () => {
+    const match = createMatch({ dealerSeat: 'north' });
+    const hand = createInitialHandForMatch(match);
+
+    expect(hand.ruleSetId).toBe('nanjing-open');
+    expect(hand.phase).toBe('ready');
+    expect(hand.dealerIndex).toBe(3);
+    expect(hand.currentPlayerIndex).toBe(3);
+    expect(hand.players.map((player) => player.hand.length)).toEqual([0, 0, 0, 0]);
+  });
+
+  it('starts a match by creating the current hand and dealing from the existing game state', () => {
+    const match = createMatch();
+    const startedMatch = startMatch(match);
+
+    expect(startedMatch).not.toBe(match);
+    expect(startedMatch.status).toBe('playing');
+    expect(startedMatch.currentHandStatus).toBe('playing');
+    expect(startedMatch.currentHand.ruleSetId).toBe('nanjing-open');
+    expect(startedMatch.currentHand.phase).toBe('playing');
+    expect(startedMatch.currentHand.dealerIndex).toBe(startedMatch.dealerIndex);
+    expect(startedMatch.currentHand.currentPlayerIndex).toBe(startedMatch.dealerIndex);
+    expect(startedMatch.currentHand.players.map((player) => player.hand.length)).toEqual([
+      14, 13, 13, 13,
+    ]);
+    expect(
+      startedMatch.currentHand.players.every((player) => player.hand.every(isOrdinaryHandTile)),
+    ).toBe(true);
+    expect(startedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+  });
+
+  it('supports dealerSeat and dealerIndex when creating or starting matches', () => {
+    const southDealerMatch = createMatch({ dealerSeat: 'south' });
+    const westDealerMatch = startMatch(createMatch(), { dealerIndex: 2 });
+
+    expect(southDealerMatch.dealerIndex).toBe(1);
+    expect(southDealerMatch.currentHand.dealerIndex).toBe(1);
+    expect(westDealerMatch.dealerIndex).toBe(2);
+    expect(westDealerMatch.currentHand.dealerIndex).toBe(2);
+    expect(westDealerMatch.currentHand.currentPlayerIndex).toBe(2);
+    expect(westDealerMatch.currentHand.players.map((player) => player.hand.length)).toEqual([
+      13, 13, 14, 13,
+    ]);
+  });
+
+  it('keeps initial flower kong scoring events pending without changing match scores', () => {
+    const deck = createNanjingMahjongDeck();
+    const redCenters = [
+      flowerTileById(deck, 'flower-red-center-1'),
+      flowerTileById(deck, 'flower-red-center-2'),
+      flowerTileById(deck, 'flower-red-center-3'),
+      flowerTileById(deck, 'flower-red-center-4'),
+    ];
+    const ordinaryTiles = deck.filter(isOrdinaryHandTile);
+    const rawOrdinaryTiles = [...ordinaryTiles.slice(0, 49)];
+    const replacementTiles = ordinaryTiles.slice(49, 53);
+    const leftoverTile = ordinaryTiles[53];
+    const fallbackOrdinaryTile = ordinaryTiles[0];
+    const [
+      firstReplacementTile,
+      secondReplacementTile,
+      thirdReplacementTile,
+      fourthReplacementTile,
+    ] = replacementTiles;
+    const rawTiles: MahjongTile[] = [];
+    const redCenterPositions = new Set([0, 4, 8, 12]);
+
+    if (
+      !leftoverTile ||
+      !fallbackOrdinaryTile ||
+      !firstReplacementTile ||
+      !secondReplacementTile ||
+      !thirdReplacementTile ||
+      !fourthReplacementTile
+    ) {
+      throw new Error('Missing ordinary tiles for match flower kong test');
+    }
+
+    for (let index = 0; index < 53; index += 1) {
+      rawTiles.push(
+        redCenterPositions.has(index)
+          ? (redCenters.shift() ?? rawOrdinaryTiles.shift() ?? fallbackOrdinaryTile)
+          : (rawOrdinaryTiles.shift() ?? fallbackOrdinaryTile),
+      );
+    }
+
+    const readyHand = {
+      ...createGame(),
+      wall: [
+        ...rawTiles,
+        leftoverTile,
+        fourthReplacementTile,
+        thirdReplacementTile,
+        secondReplacementTile,
+        firstReplacementTile,
+      ],
+    };
+    const match = {
+      ...createMatch(),
+      currentHand: readyHand,
+    };
+    const startedMatch = startMatch(match);
+
+    expect(startedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(startedMatch.currentHand.pendingScoringEvents).toEqual([
+      {
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        seat: 'east',
+        kind: 'red-center',
+        createdDuring: 'initial-deal',
+        status: 'pending',
+      },
+    ]);
+    expect('score' in playerAt(startedMatch.currentHand, 0)).toBe(false);
+  });
+});
 describe('Nanjing Mahjong player state', () => {
   it('defines the four seats in canonical action order', () => {
     expect(SEATS).toEqual(['east', 'south', 'west', 'north']);
