@@ -192,7 +192,19 @@ export function completeCurrentHand(match: MatchState, completion: HandCompletio
     effectiveDealerTurn: nextEffectiveDealerTurn,
     dealerIndex: nextDealerIndex,
     currentHandStatus: 'completed',
-    currentHand: syncHandDealer({ ...match.currentHand, phase: 'ended' }, nextDealerIndex),
+    currentHand: syncHandDealer(
+      {
+        ...match.currentHand,
+        phase: 'ended',
+        turnStage: 'hand-ended',
+        pendingAction: {
+          playerIndex: null,
+          seat: null,
+          type: 'none',
+        },
+      },
+      nextDealerIndex,
+    ),
     completedHands: [...match.completedHands, summary],
     isFinalDealerTurn: nextEffectiveDealerTurn === match.totalEffectiveDealerTurns,
   };

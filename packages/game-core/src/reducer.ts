@@ -22,6 +22,7 @@ import type {
   MahjongTile,
   NumberTile,
   OrdinaryHandTile,
+  PendingAction,
   PendingScoringEvent,
   ScoringEventCreationStage,
   SinglePlayerFlowerReplacementInput,
@@ -59,7 +60,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 }
 
 export function drawReducer(state: GameState): GameState {
-  if (state.phase !== 'playing') {
+  if (state.phase !== 'playing' || state.turnStage !== 'waiting-for-draw') {
     return copyGameState(state);
   }
 
@@ -72,11 +73,10 @@ export function drawReducer(state: GameState): GameState {
   const headDraw = drawTileFromWallHead(createTileWall(state.wall));
 
   if (headDraw.status === 'wall-exhausted') {
-    return {
+    return markHandEnded({
       ...copyGameState(state),
       wall: [...headDraw.wall.tiles],
-      phase: 'ended',
-    };
+    });
   }
 
   const drawResolution = resolveDrawnTileWithFlowerReplacement(
@@ -98,25 +98,25 @@ export function drawReducer(state: GameState): GameState {
     flowers: [...drawResolution.flowers],
   };
 
-  return {
+  const nextState: GameState = {
     ruleSetId: state.ruleSetId,
     players,
     wall: [...drawResolution.wall.tiles],
-    currentPlayerIndex:
-      drawResolution.status === 'complete'
-        ? nextPlayerIndex(state.currentPlayerIndex)
-        : state.currentPlayerIndex,
+    currentPlayerIndex: state.currentPlayerIndex,
     dealerIndex: state.dealerIndex,
-    phase:
-      drawResolution.status === 'wall-exhausted' || drawResolution.wall.tiles.length === 0
-        ? 'ended'
-        : state.phase,
+    phase: state.phase,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, state.currentPlayerIndex, 'discard'),
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
   };
+
+  return drawResolution.status === 'wall-exhausted' || drawResolution.wall.tiles.length === 0
+    ? markHandEnded(nextState)
+    : nextState;
 }
 
 export function discardReducer(state: GameState, action: DiscardAction): GameState {
-  if (state.phase !== 'playing') {
+  if (state.phase !== 'playing' || state.turnStage !== 'waiting-for-discard') {
     return copyGameState(state);
   }
 
@@ -154,13 +154,17 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     discardPile: [...copiedPlayer.discardPile, discardedTile],
   };
 
+  const nextCurrentPlayerIndex = nextPlayerIndex(state.currentPlayerIndex);
+
   return {
     ruleSetId: state.ruleSetId,
     players,
     wall: [...state.wall],
-    currentPlayerIndex: nextPlayerIndex(state.currentPlayerIndex),
+    currentPlayerIndex: nextCurrentPlayerIndex,
     dealerIndex: state.dealerIndex,
     phase: state.phase,
+    turnStage: 'waiting-for-draw',
+    pendingAction: createPendingAction(players, nextCurrentPlayerIndex, 'draw'),
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
   };
 }
@@ -173,13 +177,17 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? DEFAULT_RULE_SET_ID);
   const dealerIndex = resolveDealerIndex(options, 0);
 
+  const players = createInitialPlayers(dealerIndex);
+
   return {
     ruleSetId: ruleSet.id,
-    players: createInitialPlayers(dealerIndex),
+    players,
     wall: createNanjingMahjongDeck(),
     currentPlayerIndex: dealerIndex,
     dealerIndex,
     phase: 'ready',
+    turnStage: 'waiting-for-draw',
+    pendingAction: createPendingAction(players, dealerIndex, 'draw'),
     pendingScoringEvents: [],
   };
 }
@@ -195,13 +203,17 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     };
   }
 
+  const players = createInitialPlayers(dealerIndex);
+
   return dealInitialHands({
     ruleSetId: ruleSet.id,
-    players: createInitialPlayers(dealerIndex),
+    players,
     wall: [...state.wall],
     currentPlayerIndex: dealerIndex,
     dealerIndex,
     phase: 'playing',
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, dealerIndex, 'discard'),
     pendingScoringEvents: [],
   });
 }
@@ -289,14 +301,18 @@ function dealInitialHands(state: GameState): GameState {
     }
   }
 
-  return {
+  const nextState: GameState = {
     ...state,
     players,
     wall: [...wall.tiles],
     currentPlayerIndex: state.dealerIndex,
     phase,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, state.dealerIndex, 'discard'),
     pendingScoringEvents,
   };
+
+  return phase === 'ended' ? markHandEnded(nextState) : nextState;
 }
 
 function finishInitialDealFromRawHands(
@@ -306,18 +322,23 @@ function finishInitialDealFromRawHands(
   wall: TileWall,
   phase: GameState['phase'],
 ): GameState {
-  return {
+  const nextPlayers = players.map((player, index) => ({
+    ...player,
+    hand: rawHands[index]?.filter(isOrdinaryHandTile) ?? [],
+    flowers: rawHands[index]?.filter(isFlowerTile) ?? [],
+  }));
+  const nextState: GameState = {
     ...state,
-    players: players.map((player, index) => ({
-      ...player,
-      hand: rawHands[index]?.filter(isOrdinaryHandTile) ?? [],
-      flowers: rawHands[index]?.filter(isFlowerTile) ?? [],
-    })),
+    players: nextPlayers,
     wall: [...wall.tiles],
     currentPlayerIndex: state.dealerIndex,
     phase,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(nextPlayers, state.dealerIndex, 'discard'),
     pendingScoringEvents: [],
   };
+
+  return phase === 'ended' ? markHandEnded(nextState) : nextState;
 }
 
 function playerOrderFromDealer(dealerIndex: number): number[] {
@@ -519,7 +540,44 @@ function copyGameState(state: GameState): GameState {
     currentPlayerIndex: state.currentPlayerIndex,
     dealerIndex: state.dealerIndex,
     phase: state.phase,
+    turnStage: state.turnStage,
+    pendingAction: { ...state.pendingAction },
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+  };
+}
+
+function createPendingAction(
+  players: readonly PlayerState[],
+  playerIndex: number,
+  type: PendingAction['type'],
+): PendingAction {
+  const player = players[playerIndex];
+
+  if (!player) {
+    throw new Error(`Invalid pending action player index ${playerIndex}`);
+  }
+
+  return {
+    playerIndex,
+    seat: player.seat,
+    type,
+  };
+}
+
+function createNoPendingAction(): PendingAction {
+  return {
+    playerIndex: null,
+    seat: null,
+    type: 'none',
+  };
+}
+
+function markHandEnded(state: GameState): GameState {
+  return {
+    ...state,
+    phase: 'ended',
+    turnStage: 'hand-ended',
+    pendingAction: createNoPendingAction(),
   };
 }
 

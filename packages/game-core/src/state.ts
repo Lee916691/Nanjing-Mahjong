@@ -89,6 +89,15 @@ export type MahjongTile = OrdinaryHandTile | FlowerTile;
 export type Tile = MahjongTile;
 
 export type GamePhase = 'ready' | 'playing' | 'ended';
+export type TurnStage =
+  'waiting-for-draw' | 'waiting-for-discard' | 'waiting-for-reaction' | 'hand-ended';
+export type PendingActionType = 'draw' | 'discard' | 'reaction' | 'none';
+
+export interface PendingAction {
+  readonly playerIndex: number | null;
+  readonly seat: PlayerState['seat'] | null;
+  readonly type: PendingActionType;
+}
 
 export type FlowerKongKind =
   FourCopyFlowerKind | 'plum-orchid-bamboo-chrysanthemum' | 'spring-summer-autumn-winter';
@@ -113,6 +122,8 @@ export interface GameState {
   currentPlayerIndex: number;
   dealerIndex: number;
   phase: GamePhase;
+  turnStage: TurnStage;
+  pendingAction: PendingAction;
   pendingScoringEvents: readonly PendingScoringEvent[];
 }
 
