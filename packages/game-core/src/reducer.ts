@@ -164,12 +164,46 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     discardPile: [...copiedPlayer.discardPile, discardedTile],
   };
 
-  const reactionWindow = createReactionWindow(players, state.currentPlayerIndex, discardedTile);
-  const firstResponder = reactionWindow.responderOrder[0];
+  const reactionWindowShell = createReactionWindow(
+    players,
+    state.currentPlayerIndex,
+    discardedTile,
+  );
+  const firstResponder = reactionWindowShell.responderOrder[0];
 
   if (!firstResponder) {
     throw new Error('Reaction window must have at least one responder');
   }
+
+  const pendingAction = createPendingAction(players, firstResponder.playerIndex, 'reaction');
+  const lastDiscard = {
+    tile: discardedTile,
+    tileId: discardedTile.id,
+    fromPlayerIndex: state.currentPlayerIndex,
+    fromSeat: copiedPlayer.seat,
+  };
+  const stateForAvailability: GameState = {
+    ruleSetId: state.ruleSetId,
+    players,
+    wall: [...state.wall],
+    currentPlayerIndex: firstResponder.playerIndex,
+    dealerIndex: state.dealerIndex,
+    phase: state.phase,
+    turnStage: 'waiting-for-reaction',
+    pendingAction,
+    lastDiscard,
+    reactionWindow: reactionWindowShell,
+    pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+  };
+  const reactionWindow: ReactionWindow = {
+    ...reactionWindowShell,
+    availableReactions: [
+      ...getRuleSet(state.ruleSetId).getAvailableReactions(
+        stateForAvailability,
+        reactionWindowShell,
+      ),
+    ],
+  };
 
   return {
     ruleSetId: state.ruleSetId,
@@ -179,13 +213,8 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     dealerIndex: state.dealerIndex,
     phase: state.phase,
     turnStage: 'waiting-for-reaction',
-    pendingAction: createPendingAction(players, firstResponder.playerIndex, 'reaction'),
-    lastDiscard: {
-      tile: discardedTile,
-      tileId: discardedTile.id,
-      fromPlayerIndex: state.currentPlayerIndex,
-      fromSeat: copiedPlayer.seat,
-    },
+    pendingAction,
+    lastDiscard,
     reactionWindow,
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
   };
@@ -655,6 +684,7 @@ function createReactionWindow(
     fromPlayerIndex,
     fromSeat: discarder.seat,
     responderOrder: createResponderOrder(players, fromPlayerIndex),
+    availableReactions: [],
     responses: [],
     status: 'open',
   };
@@ -699,6 +729,10 @@ function copyReactionWindow(reactionWindow: ReactionWindow): ReactionWindow {
   return {
     ...reactionWindow,
     responderOrder: reactionWindow.responderOrder.map((responder) => ({ ...responder })),
+    availableReactions: reactionWindow.availableReactions.map((availability) => ({
+      ...availability,
+      responseTypes: [...availability.responseTypes],
+    })),
     responses: reactionWindow.responses.map((response) => ({ ...response })),
   };
 }

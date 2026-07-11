@@ -43,6 +43,8 @@ import type {
   MatchState,
   OrdinaryHandTile,
   PlayerState,
+  ReactionAvailability,
+  ReactionWindow,
   RuleSetOptions,
   StartGameOptions,
   TileId,
@@ -136,6 +138,7 @@ describe('Nanjing Mahjong RuleSet registry', () => {
     expect(ruleSet.totalEffectiveDealerTurns).toBe(16);
     expect(ruleSet.validateAction(state, action)).toBe(true);
     expect(ruleSet.applyAction(state, action)).toBe(state);
+    expect(typeof ruleSet.getAvailableReactions).toBe('function');
     expect(listRuleSets()).toEqual([NANJING_OPEN_RULE_SET]);
   });
 });
@@ -538,7 +541,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       fromPlayerIndex: 0,
       fromSeat: 'east',
     });
-    expect(nextState.reactionWindow).toEqual({
+    expect(nextState.reactionWindow).toMatchObject({
       discardedTile: dealerTile,
       fromPlayerIndex: 0,
       fromSeat: 'east',
@@ -893,6 +896,11 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         { playerIndex: 2, seat: 'west' },
         { playerIndex: 3, seat: 'north' },
       ],
+      availableReactions: [
+        { playerIndex: 1, seat: 'south', responseTypes: ['pass'] },
+        { playerIndex: 2, seat: 'west', responseTypes: ['pass'] },
+        { playerIndex: 3, seat: 'north', responseTypes: ['pass'] },
+      ],
       responses: [],
       status: 'open',
     });
@@ -909,6 +917,172 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(nextState.wall).not.toBe(state.wall);
     expect(tileIds(playerAt(state, 0).hand)).toEqual(['wan-1-1', 'wind-east-1']);
     expect(playerAt(state, 0).discardPile).toEqual([]);
+  });
+
+  it('adds availableReactions in responder order with pass and peng for two matching ordinary tiles', () => {
+    const deck = createNanjingMahjongDeck();
+    const discardedTile = ordinaryTileById(deck, 'wan-3-1');
+    const players = createInitialPlayers();
+    const eastPlayer = players[0];
+    const southPlayer = players[1];
+
+    if (!eastPlayer || !southPlayer) {
+      throw new Error('Missing players for reaction availability test');
+    }
+
+    players[0] = { ...eastPlayer, hand: [discardedTile] };
+    players[1] = {
+      ...southPlayer,
+      hand: [ordinaryTileById(deck, 'wan-3-2'), ordinaryTileById(deck, 'wan-3-3')],
+    };
+    const state: GameState = {
+      ruleSetId: DEFAULT_RULE_SET_ID,
+      players,
+      wall: [],
+      currentPlayerIndex: 0,
+      dealerIndex: 0,
+      phase: 'playing',
+      turnStage: 'waiting-for-discard',
+      pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
+      pendingScoringEvents: [],
+    };
+    const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+
+    expect(nextState.reactionWindow?.availableReactions).toEqual([
+      { playerIndex: 1, seat: 'south', responseTypes: ['pass', 'peng'] },
+      { playerIndex: 2, seat: 'west', responseTypes: ['pass'] },
+      { playerIndex: 3, seat: 'north', responseTypes: ['pass'] },
+    ] satisfies ReactionAvailability[]);
+    expect(
+      nextState.reactionWindow?.availableReactions.map((availability) => availability.playerIndex),
+    ).toEqual(nextState.reactionWindow?.responderOrder.map((responder) => responder.playerIndex));
+    expect(
+      nextState.reactionWindow?.availableReactions.every((availability) =>
+        availability.responseTypes.includes('pass'),
+      ),
+    ).toBe(true);
+    expect(
+      nextState.reactionWindow?.availableReactions.some((availability) =>
+        availability.responseTypes.includes('hu'),
+      ),
+    ).toBe(false);
+  });
+
+  it('marks ming-gang available for three matching ordinary tiles without executing it', () => {
+    const deck = createNanjingMahjongDeck();
+    const discardedTile = ordinaryTileById(deck, 'tong-6-1');
+    const players = createInitialPlayers();
+    const eastPlayer = players[0];
+    const southPlayer = players[1];
+
+    if (!eastPlayer || !southPlayer) {
+      throw new Error('Missing players for ming-gang availability test');
+    }
+
+    players[0] = { ...eastPlayer, hand: [discardedTile] };
+    players[1] = {
+      ...southPlayer,
+      hand: [
+        ordinaryTileById(deck, 'tong-6-2'),
+        ordinaryTileById(deck, 'tong-6-3'),
+        ordinaryTileById(deck, 'tong-6-4'),
+      ],
+    };
+    const state: GameState = {
+      ruleSetId: DEFAULT_RULE_SET_ID,
+      players,
+      wall: [],
+      currentPlayerIndex: 0,
+      dealerIndex: 0,
+      phase: 'playing',
+      turnStage: 'waiting-for-discard',
+      pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
+      pendingScoringEvents: [],
+    };
+    const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+
+    expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).toContain('ming-gang');
+    expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).not.toContain('hu');
+    expect(playerAt(nextState, 1).hand).toEqual(playerAt(state, 1).hand);
+    expect(playerAt(nextState, 1).discardPile).toEqual([]);
+    expect('cumulativeScores' in nextState).toBe(false);
+  });
+
+  it('treats wind tiles as ordinary tiles for reaction availability', () => {
+    const deck = createNanjingMahjongDeck();
+    const discardedTile = ordinaryTileById(deck, 'wind-east-1');
+    const players = createInitialPlayers();
+    const eastPlayer = players[0];
+    const southPlayer = players[1];
+
+    if (!eastPlayer || !southPlayer) {
+      throw new Error('Missing players for wind availability test');
+    }
+
+    players[0] = { ...eastPlayer, hand: [discardedTile] };
+    players[1] = {
+      ...southPlayer,
+      hand: [ordinaryTileById(deck, 'wind-east-2'), ordinaryTileById(deck, 'wind-east-3')],
+    };
+    const state: GameState = {
+      ruleSetId: DEFAULT_RULE_SET_ID,
+      players,
+      wall: [],
+      currentPlayerIndex: 0,
+      dealerIndex: 0,
+      phase: 'playing',
+      turnStage: 'waiting-for-discard',
+      pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
+      pendingScoringEvents: [],
+    };
+    const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+
+    expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).toEqual([
+      'pass',
+      'peng',
+    ]);
+  });
+
+  it.each([
+    'flower-red-center-1',
+    'flower-fortune-1',
+    'flower-white-board-1',
+    'season-spring-1',
+  ] as const)('does not expose peng or ming-gang for flower discard %s', (tileId) => {
+    const deck = createNanjingMahjongDeck();
+    const players = createInitialPlayers();
+    const discardedTile = flowerTileById(deck, tileId);
+    const reactionWindow: ReactionWindow = {
+      discardedTile,
+      fromPlayerIndex: 0,
+      fromSeat: 'east',
+      responderOrder: [
+        { playerIndex: 1, seat: 'south' },
+        { playerIndex: 2, seat: 'west' },
+        { playerIndex: 3, seat: 'north' },
+      ],
+      availableReactions: [],
+      responses: [],
+      status: 'open',
+    };
+    const state: GameState = {
+      ruleSetId: DEFAULT_RULE_SET_ID,
+      players,
+      wall: [],
+      currentPlayerIndex: 1,
+      dealerIndex: 0,
+      phase: 'playing',
+      turnStage: 'waiting-for-reaction',
+      pendingAction: { playerIndex: 1, seat: 'south', type: 'reaction' },
+      reactionWindow,
+      pendingScoringEvents: [],
+    };
+
+    expect(NANJING_OPEN_RULE_SET.getAvailableReactions(state, reactionWindow)).toEqual([
+      { playerIndex: 1, seat: 'south', responseTypes: ['pass'] },
+      { playerIndex: 2, seat: 'west', responseTypes: ['pass'] },
+      { playerIndex: 3, seat: 'north', responseTypes: ['pass'] },
+    ]);
   });
 
   it('keeps the same player waiting to discard after an ordinary head draw', () => {

@@ -112,6 +112,12 @@ export interface ReactionResponder {
   readonly seat: PlayerState['seat'];
 }
 
+export interface ReactionAvailability {
+  readonly playerIndex: number;
+  readonly seat: PlayerState['seat'];
+  readonly responseTypes: readonly ReactionResponseType[];
+}
+
 export interface ReactionResponse {
   readonly playerIndex: number;
   readonly seat: PlayerState['seat'];
@@ -123,6 +129,7 @@ export interface ReactionWindow {
   readonly fromPlayerIndex: number;
   readonly fromSeat: PlayerState['seat'];
   readonly responderOrder: readonly ReactionResponder[];
+  readonly availableReactions: readonly ReactionAvailability[];
   readonly responses: readonly ReactionResponse[];
   readonly status: 'open' | 'closed';
 }

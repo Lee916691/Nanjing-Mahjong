@@ -37,6 +37,7 @@ export type {
   PendingScoringEvent,
   LastDiscard,
   PlantFlowerKind,
+  ReactionAvailability,
   ReactionResponder,
   ReactionResponse,
   ReactionWindow,
