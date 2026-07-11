@@ -75,6 +75,8 @@ export type {
   GameAction,
   PassReactionAction,
   ReactionAction,
+  ReactionResponseType,
+  SubmitReactionAction,
   StartGameAction,
 } from './actions';
 export type { GameCreationOptions, RuleSetOptions, StartGameOptions } from './options';

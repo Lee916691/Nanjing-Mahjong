@@ -1,3 +1,4 @@
+import type { ReactionResponseType } from './actions';
 import type { PlayerState } from './player';
 import type { RuleSetId } from './rules/RuleSet';
 
@@ -114,7 +115,7 @@ export interface ReactionResponder {
 export interface ReactionResponse {
   readonly playerIndex: number;
   readonly seat: PlayerState['seat'];
-  readonly type: 'pass';
+  readonly type: ReactionResponseType;
 }
 
 export interface ReactionWindow {

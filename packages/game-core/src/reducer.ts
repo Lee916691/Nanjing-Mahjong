@@ -1,7 +1,7 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player';
 import type { PlayerState } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
-import type { DiscardAction, GameAction } from './actions';
+import type { DiscardAction, GameAction, ReactionResponseType } from './actions';
 import type { GameCreationOptions, StartGameOptions } from './options';
 import {
   FOUR_COPY_FLOWER_KINDS,
@@ -40,6 +40,8 @@ export type {
   GameAction,
   PassReactionAction,
   ReactionAction,
+  ReactionResponseType,
+  SubmitReactionAction,
   StartGameAction,
 } from './actions';
 
@@ -57,7 +59,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'DISCARDED_TILE':
       return discardReducer(state, action);
     case 'PASS_REACTION':
-      return passReactionReducer(state);
+      return submitReactionReducer(state, 'pass');
+    case 'SUBMIT_REACTION':
+      return submitReactionReducer(state, action.responseType);
     case 'PENG':
     case 'GANG':
     case 'HU':
@@ -188,10 +192,18 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
 }
 
 export function passReactionReducer(state: GameState): GameState {
+  return submitReactionReducer(state, 'pass');
+}
+
+export function submitReactionReducer(
+  state: GameState,
+  responseType: ReactionResponseType,
+): GameState {
   if (
     state.phase !== 'playing' ||
     state.turnStage !== 'waiting-for-reaction' ||
-    state.reactionWindow?.status !== 'open'
+    state.reactionWindow?.status !== 'open' ||
+    state.reactionWindow.responses.some((response) => response.type !== 'pass')
   ) {
     return copyGameState(state);
   }
@@ -206,15 +218,25 @@ export function passReactionReducer(state: GameState): GameState {
   const response: ReactionResponse = {
     playerIndex: currentResponder.playerIndex,
     seat: currentResponder.seat,
-    type: 'pass',
+    type: responseType,
   };
   const responses = [...state.reactionWindow.responses, response];
   const nextResponder = state.reactionWindow.responderOrder[responses.length];
   const reactionWindow: ReactionWindow = {
     ...state.reactionWindow,
     responses,
-    status: nextResponder ? 'open' : 'closed',
+    status: responseType === 'pass' && !nextResponder ? 'closed' : 'open',
   };
+
+  if (responseType !== 'pass') {
+    return {
+      ...copyGameState(state),
+      currentPlayerIndex: currentResponder.playerIndex,
+      turnStage: 'waiting-for-reaction',
+      pendingAction: createPendingAction(state.players, currentResponder.playerIndex, 'reaction'),
+      reactionWindow,
+    };
+  }
 
   if (nextResponder) {
     return {
@@ -236,7 +258,6 @@ export function passReactionReducer(state: GameState): GameState {
     reactionWindow,
   };
 }
-
 export function reactionReducer(state: GameState): GameState {
   return copyGameState(state);
 }

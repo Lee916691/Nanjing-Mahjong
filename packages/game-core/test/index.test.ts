@@ -111,6 +111,18 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
     pendingScoringEvents: [],
   };
 }
+
+function createWaitingForReactionState(): GameState {
+  const deck = createNanjingMahjongDeck();
+  let state = createPlayingGameWithWall([
+    ordinaryTileById(deck, 'wan-2-1'),
+    ordinaryTileById(deck, 'wan-2-2'),
+  ]);
+
+  state = advanceTurn(state);
+
+  return applyAction(state, { type: 'DISCARD_TILE', tileId: 'wan-2-1' });
+}
 describe('Nanjing Mahjong RuleSet registry', () => {
   it('registers nanjing-open as the default RuleSet shell', () => {
     const state = createGame();
@@ -1003,6 +1015,103 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     });
   });
 
+  it('treats SUBMIT_REACTION pass the same as PASS_REACTION', () => {
+    const state = createWaitingForReactionState();
+
+    expect(applyAction(state, { type: 'SUBMIT_REACTION', responseType: 'pass' })).toEqual(
+      applyAction(state, { type: 'PASS_REACTION' }),
+    );
+  });
+
+  it.each(['hu', 'peng', 'ming-gang'] as const)(
+    'records SUBMIT_REACTION %s without executing the claim',
+    (responseType) => {
+      const pendingScoringEvents: GameState['pendingScoringEvents'] = [
+        {
+          type: 'flower-kong-created',
+          playerIndex: 0,
+          seat: 'east',
+          kind: 'red-center',
+          createdDuring: 'initial-deal',
+          status: 'pending',
+        },
+      ];
+      const state = {
+        ...createWaitingForReactionState(),
+        pendingScoringEvents,
+      };
+      const handsBefore = state.players.map((player) => tileIds(player.hand));
+      const flowersBefore = state.players.map((player) => tileIds(player.flowers));
+      const discardPilesBefore = state.players.map((player) => tileIds(player.discardPile));
+
+      const nextState = applyAction(state, { type: 'SUBMIT_REACTION', responseType });
+      const afterAnotherSubmit = applyAction(nextState, {
+        type: 'SUBMIT_REACTION',
+        responseType: 'pass',
+      });
+
+      expect(nextState.reactionWindow?.responses).toEqual([
+        { playerIndex: 1, seat: 'south', type: responseType },
+      ]);
+      expect(nextState.reactionWindow?.status).toBe('open');
+      expect(nextState.currentPlayerIndex).toBe(1);
+      expect(nextState.turnStage).toBe('waiting-for-reaction');
+      expect(nextState.pendingAction).toEqual({
+        playerIndex: 1,
+        seat: 'south',
+        type: 'reaction',
+      });
+      expect(nextState.players.map((player) => tileIds(player.hand))).toEqual(handsBefore);
+      expect(nextState.players.map((player) => tileIds(player.flowers))).toEqual(flowersBefore);
+      expect(nextState.players.map((player) => tileIds(player.discardPile))).toEqual(
+        discardPilesBefore,
+      );
+      expect(nextState.players.map((player) => 'melds' in player)).toEqual([
+        false,
+        false,
+        false,
+        false,
+      ]);
+      expect(nextState.players.map((player) => 'score' in player)).toEqual([
+        false,
+        false,
+        false,
+        false,
+      ]);
+      expect(nextState.pendingScoringEvents).toEqual(pendingScoringEvents);
+      expect('cumulativeScores' in nextState).toBe(false);
+      expect(afterAnotherSubmit).toEqual(nextState);
+      expect(afterAnotherSubmit.turnStage).toBe('waiting-for-reaction');
+      expect(afterAnotherSubmit.pendingAction.type).toBe('reaction');
+      expect(afterAnotherSubmit.reactionWindow?.status).toBe('open');
+    },
+  );
+
+  it('ignores SUBMIT_REACTION outside an open reaction window', () => {
+    const notWaitingForReaction = createPlayingGameWithWall([]);
+    let closedWindowState = createWaitingForReactionState();
+
+    closedWindowState = applyAction(closedWindowState, { type: 'PASS_REACTION' });
+    closedWindowState = applyAction(closedWindowState, { type: 'PASS_REACTION' });
+    closedWindowState = applyAction(closedWindowState, { type: 'PASS_REACTION' });
+
+    expect(
+      applyAction(notWaitingForReaction, { type: 'SUBMIT_REACTION', responseType: 'pass' }),
+    ).toEqual(notWaitingForReaction);
+    expect(closedWindowState.reactionWindow?.status).toBe('closed');
+    expect(applyAction(closedWindowState, { type: 'SUBMIT_REACTION', responseType: 'hu' })).toEqual(
+      closedWindowState,
+    );
+  });
+
+  it('ignores DISCARD_TILE while waiting for a reaction response', () => {
+    const state = createWaitingForReactionState();
+    const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: 'wan-2-2' });
+
+    expect(nextState).toEqual(state);
+    expect(nextState.turnStage).toBe('waiting-for-reaction');
+    expect(nextState.pendingAction.type).toBe('reaction');
+  });
   it('closes the reaction window after three passes and waits for the discarder next player to draw', () => {
     const deck = createNanjingMahjongDeck();
     let state = createPlayingGameWithWall([
