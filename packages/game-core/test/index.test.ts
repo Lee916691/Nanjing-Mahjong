@@ -497,7 +497,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(readyGame.players.every((player) => player.hand.length === 0)).toBe(true);
   });
 
-  it('lets the dealer discard first after startGame without requiring an opening draw', () => {
+  it('lets the dealer discard first after startGame and opens a reaction window', () => {
     const playingGame = startGame(createGame());
     const dealerTile = playerAt(playingGame, playingGame.dealerIndex).hand[0];
 
@@ -514,11 +514,29 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(playingGame.pendingAction.type).toBe('discard');
     expect(tileIds(playerAt(nextState, 0).discardPile)).toEqual([dealerTile.id]);
     expect(nextState.currentPlayerIndex).toBe(1);
-    expect(nextState.turnStage).toBe('waiting-for-draw');
+    expect(nextState.turnStage).toBe('waiting-for-reaction');
     expect(nextState.pendingAction).toEqual({
       playerIndex: 1,
       seat: 'south',
-      type: 'draw',
+      type: 'reaction',
+    });
+    expect(nextState.lastDiscard).toEqual({
+      tile: dealerTile,
+      tileId: dealerTile.id,
+      fromPlayerIndex: 0,
+      fromSeat: 'east',
+    });
+    expect(nextState.reactionWindow).toEqual({
+      discardedTile: dealerTile,
+      fromPlayerIndex: 0,
+      fromSeat: 'east',
+      responderOrder: [
+        { playerIndex: 1, seat: 'south' },
+        { playerIndex: 2, seat: 'west' },
+        { playerIndex: 3, seat: 'north' },
+      ],
+      responses: [],
+      status: 'open',
     });
   });
   it('moves flowers from the initial deal into the flower area and replaces from the tail', () => {
@@ -782,8 +800,15 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(gameEngine.applyAction(state, action)).toEqual(advanceTurn(state));
   });
 
-  it('keeps reaction actions as structural placeholders without mutating state', () => {
-    const state = startGame(createGame());
+  it('keeps PENG, GANG, and HU as structural placeholders during a reaction window', () => {
+    const playingGame = startGame(createGame());
+    const dealerTile = playerAt(playingGame, playingGame.dealerIndex).hand[0];
+
+    if (!dealerTile) {
+      throw new Error('Expected dealer to have a tile to discard');
+    }
+
+    const state = applyAction(playingGame, { type: 'DISCARD_TILE', tileId: dealerTile.id });
     const actions: GameAction[] = [{ type: 'PENG' }, { type: 'GANG' }, { type: 'HU' }];
 
     for (const action of actions) {
@@ -796,7 +821,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     }
   });
 
-  it('removes a discarded tile from the current player hand, records it, and rotates', () => {
+  it('removes a discarded tile, records lastDiscard, and opens a reaction window', () => {
     const deck = createNanjingMahjongDeck();
     const discardedTile = ordinaryTileById(deck, 'wan-1-1');
     const keptTile = ordinaryTileById(deck, 'wind-east-1');
@@ -811,6 +836,16 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       ...eastPlayer,
       hand: [discardedTile, keptTile],
     };
+    const pendingScoringEvents = [
+      {
+        type: 'flower-kong-created' as const,
+        playerIndex: 0,
+        seat: 'east' as const,
+        kind: 'red-center' as const,
+        createdDuring: 'initial-deal' as const,
+        status: 'pending' as const,
+      },
+    ];
     const state: GameState = {
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
@@ -824,20 +859,39 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         seat: 'east',
         type: 'discard',
       },
-      pendingScoringEvents: [],
+      pendingScoringEvents,
     };
     const action: GameAction = { type: 'DISCARD_TILE', tileId: discardedTile.id };
     const nextState = applyAction(state, action);
 
     expect(tileIds(playerAt(nextState, 0).hand)).toEqual(['wind-east-1']);
     expect(tileIds(playerAt(nextState, 0).discardPile)).toEqual(['wan-1-1']);
+    expect(nextState.lastDiscard).toEqual({
+      tile: discardedTile,
+      tileId: discardedTile.id,
+      fromPlayerIndex: 0,
+      fromSeat: 'east',
+    });
+    expect(nextState.reactionWindow).toEqual({
+      discardedTile,
+      fromPlayerIndex: 0,
+      fromSeat: 'east',
+      responderOrder: [
+        { playerIndex: 1, seat: 'south' },
+        { playerIndex: 2, seat: 'west' },
+        { playerIndex: 3, seat: 'north' },
+      ],
+      responses: [],
+      status: 'open',
+    });
     expect(nextState.currentPlayerIndex).toBe(1);
-    expect(nextState.turnStage).toBe('waiting-for-draw');
+    expect(nextState.turnStage).toBe('waiting-for-reaction');
     expect(nextState.pendingAction).toEqual({
       playerIndex: 1,
       seat: 'south',
-      type: 'draw',
+      type: 'reaction',
     });
+    expect(nextState.pendingScoringEvents).toEqual(pendingScoringEvents);
     expect(nextState).not.toBe(state);
     expect(nextState.players).not.toBe(state.players);
     expect(nextState.wall).not.toBe(state.wall);
@@ -881,7 +935,51 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(nextState.phase).toBe('playing');
   });
 
-  it('moves to the next player waiting for draw after discard', () => {
+  it('orders responders from a south discard as west, north, east', () => {
+    const deck = createNanjingMahjongDeck();
+    const discardedTile = ordinaryTileById(deck, 'wan-2-1');
+    const players = createInitialPlayers(1);
+    const southPlayer = players[1];
+
+    if (!southPlayer) {
+      throw new Error('Missing south player');
+    }
+
+    players[1] = {
+      ...southPlayer,
+      hand: [discardedTile],
+    };
+    const state: GameState = {
+      ruleSetId: DEFAULT_RULE_SET_ID,
+      players,
+      wall: [],
+      currentPlayerIndex: 1,
+      dealerIndex: 1,
+      phase: 'playing',
+      turnStage: 'waiting-for-discard',
+      pendingAction: {
+        playerIndex: 1,
+        seat: 'south',
+        type: 'discard',
+      },
+      pendingScoringEvents: [],
+    };
+    const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+
+    expect(nextState.reactionWindow?.responderOrder).toEqual([
+      { playerIndex: 2, seat: 'west' },
+      { playerIndex: 3, seat: 'north' },
+      { playerIndex: 0, seat: 'east' },
+    ]);
+    expect(nextState.currentPlayerIndex).toBe(2);
+    expect(nextState.pendingAction).toEqual({
+      playerIndex: 2,
+      seat: 'west',
+      type: 'reaction',
+    });
+  });
+
+  it('records PASS_REACTION and advances to the next responder', () => {
     const deck = createNanjingMahjongDeck();
     let state = createPlayingGameWithWall([
       ordinaryTileById(deck, 'wan-2-1'),
@@ -890,7 +988,42 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
 
     state = advanceTurn(state);
     state = applyAction(state, { type: 'DISCARD_TILE', tileId: 'wan-2-1' });
+    const afterPass = applyAction(state, { type: 'PASS_REACTION' });
 
+    expect(afterPass.reactionWindow?.responses).toEqual([
+      { playerIndex: 1, seat: 'south', type: 'pass' },
+    ]);
+    expect(afterPass.reactionWindow?.status).toBe('open');
+    expect(afterPass.currentPlayerIndex).toBe(2);
+    expect(afterPass.turnStage).toBe('waiting-for-reaction');
+    expect(afterPass.pendingAction).toEqual({
+      playerIndex: 2,
+      seat: 'west',
+      type: 'reaction',
+    });
+  });
+
+  it('closes the reaction window after three passes and waits for the discarder next player to draw', () => {
+    const deck = createNanjingMahjongDeck();
+    let state = createPlayingGameWithWall([
+      ordinaryTileById(deck, 'wan-2-1'),
+      ordinaryTileById(deck, 'wan-2-2'),
+    ]);
+
+    state = advanceTurn(state);
+    state = applyAction(state, { type: 'DISCARD_TILE', tileId: 'wan-2-1' });
+    const drawDuringReaction = advanceTurn(state);
+    state = applyAction(state, { type: 'PASS_REACTION' });
+    state = applyAction(state, { type: 'PASS_REACTION' });
+    state = applyAction(state, { type: 'PASS_REACTION' });
+
+    expect(drawDuringReaction).toEqual(applyAction(drawDuringReaction, { type: 'DRAW_TILE' }));
+    expect(state.reactionWindow?.responses).toEqual([
+      { playerIndex: 1, seat: 'south', type: 'pass' },
+      { playerIndex: 2, seat: 'west', type: 'pass' },
+      { playerIndex: 3, seat: 'north', type: 'pass' },
+    ]);
+    expect(state.reactionWindow?.status).toBe('closed');
     expect(state.currentPlayerIndex).toBe(1);
     expect(state.turnStage).toBe('waiting-for-draw');
     expect(state.pendingAction).toEqual({

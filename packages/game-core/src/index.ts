@@ -35,7 +35,11 @@ export type {
   PendingActionType,
   PendingFlowerKongScoringEvent,
   PendingScoringEvent,
+  LastDiscard,
   PlantFlowerKind,
+  ReactionResponder,
+  ReactionResponse,
+  ReactionWindow,
   ScoringEventCreationStage,
   SeasonFlowerTile,
   SeasonFlowerTileId,
@@ -65,9 +69,11 @@ export { SEATS, createInitialPlayers } from './player';
 export type { PlayerState, Seat } from './player';
 
 export type {
+  ClaimReactionAction,
   DiscardAction,
   DrawAction,
   GameAction,
+  PassReactionAction,
   ReactionAction,
   StartGameAction,
 } from './actions';

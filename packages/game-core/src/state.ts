@@ -99,6 +99,33 @@ export interface PendingAction {
   readonly type: PendingActionType;
 }
 
+export interface LastDiscard {
+  readonly tile: Tile;
+  readonly tileId: TileId;
+  readonly fromPlayerIndex: number;
+  readonly fromSeat: PlayerState['seat'];
+}
+
+export interface ReactionResponder {
+  readonly playerIndex: number;
+  readonly seat: PlayerState['seat'];
+}
+
+export interface ReactionResponse {
+  readonly playerIndex: number;
+  readonly seat: PlayerState['seat'];
+  readonly type: 'pass';
+}
+
+export interface ReactionWindow {
+  readonly discardedTile: Tile;
+  readonly fromPlayerIndex: number;
+  readonly fromSeat: PlayerState['seat'];
+  readonly responderOrder: readonly ReactionResponder[];
+  readonly responses: readonly ReactionResponse[];
+  readonly status: 'open' | 'closed';
+}
+
 export type FlowerKongKind =
   FourCopyFlowerKind | 'plum-orchid-bamboo-chrysanthemum' | 'spring-summer-autumn-winter';
 
@@ -124,6 +151,8 @@ export interface GameState {
   phase: GamePhase;
   turnStage: TurnStage;
   pendingAction: PendingAction;
+  lastDiscard?: LastDiscard;
+  reactionWindow?: ReactionWindow;
   pendingScoringEvents: readonly PendingScoringEvent[];
 }
 

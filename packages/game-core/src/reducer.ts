@@ -24,6 +24,8 @@ import type {
   OrdinaryHandTile,
   PendingAction,
   PendingScoringEvent,
+  ReactionResponse,
+  ReactionWindow,
   ScoringEventCreationStage,
   SinglePlayerFlowerReplacementInput,
   SinglePlayerFlowerReplacementResult,
@@ -32,9 +34,11 @@ import type {
 } from './state';
 
 export type {
+  ClaimReactionAction,
   DiscardAction,
   DrawAction,
   GameAction,
+  PassReactionAction,
   ReactionAction,
   StartGameAction,
 } from './actions';
@@ -52,6 +56,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'DISCARD_TILE':
     case 'DISCARDED_TILE':
       return discardReducer(state, action);
+    case 'PASS_REACTION':
+      return passReactionReducer(state);
     case 'PENG':
     case 'GANG':
     case 'HU':
@@ -154,18 +160,80 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     discardPile: [...copiedPlayer.discardPile, discardedTile],
   };
 
-  const nextCurrentPlayerIndex = nextPlayerIndex(state.currentPlayerIndex);
+  const reactionWindow = createReactionWindow(players, state.currentPlayerIndex, discardedTile);
+  const firstResponder = reactionWindow.responderOrder[0];
+
+  if (!firstResponder) {
+    throw new Error('Reaction window must have at least one responder');
+  }
 
   return {
     ruleSetId: state.ruleSetId,
     players,
     wall: [...state.wall],
-    currentPlayerIndex: nextCurrentPlayerIndex,
+    currentPlayerIndex: firstResponder.playerIndex,
     dealerIndex: state.dealerIndex,
     phase: state.phase,
-    turnStage: 'waiting-for-draw',
-    pendingAction: createPendingAction(players, nextCurrentPlayerIndex, 'draw'),
+    turnStage: 'waiting-for-reaction',
+    pendingAction: createPendingAction(players, firstResponder.playerIndex, 'reaction'),
+    lastDiscard: {
+      tile: discardedTile,
+      tileId: discardedTile.id,
+      fromPlayerIndex: state.currentPlayerIndex,
+      fromSeat: copiedPlayer.seat,
+    },
+    reactionWindow,
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+  };
+}
+
+export function passReactionReducer(state: GameState): GameState {
+  if (
+    state.phase !== 'playing' ||
+    state.turnStage !== 'waiting-for-reaction' ||
+    state.reactionWindow?.status !== 'open'
+  ) {
+    return copyGameState(state);
+  }
+
+  const currentResponder =
+    state.reactionWindow.responderOrder[state.reactionWindow.responses.length];
+
+  if (!currentResponder) {
+    return closeReactionWindow(state);
+  }
+
+  const response: ReactionResponse = {
+    playerIndex: currentResponder.playerIndex,
+    seat: currentResponder.seat,
+    type: 'pass',
+  };
+  const responses = [...state.reactionWindow.responses, response];
+  const nextResponder = state.reactionWindow.responderOrder[responses.length];
+  const reactionWindow: ReactionWindow = {
+    ...state.reactionWindow,
+    responses,
+    status: nextResponder ? 'open' : 'closed',
+  };
+
+  if (nextResponder) {
+    return {
+      ...copyGameState(state),
+      currentPlayerIndex: nextResponder.playerIndex,
+      turnStage: 'waiting-for-reaction',
+      pendingAction: createPendingAction(state.players, nextResponder.playerIndex, 'reaction'),
+      reactionWindow,
+    };
+  }
+
+  const nextDrawPlayerIndex = nextPlayerIndex(state.reactionWindow.fromPlayerIndex);
+
+  return {
+    ...copyGameState(state),
+    currentPlayerIndex: nextDrawPlayerIndex,
+    turnStage: 'waiting-for-draw',
+    pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
+    reactionWindow,
   };
 }
 
@@ -542,7 +610,75 @@ function copyGameState(state: GameState): GameState {
     phase: state.phase,
     turnStage: state.turnStage,
     pendingAction: { ...state.pendingAction },
+    ...(state.lastDiscard === undefined ? {} : { lastDiscard: { ...state.lastDiscard } }),
+    ...(state.reactionWindow === undefined
+      ? {}
+      : { reactionWindow: copyReactionWindow(state.reactionWindow) }),
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+  };
+}
+
+function createReactionWindow(
+  players: readonly PlayerState[],
+  fromPlayerIndex: number,
+  discardedTile: MahjongTile,
+): ReactionWindow {
+  const discarder = players[fromPlayerIndex];
+
+  if (!discarder) {
+    throw new Error(`Invalid discard player index ${fromPlayerIndex}`);
+  }
+
+  return {
+    discardedTile,
+    fromPlayerIndex,
+    fromSeat: discarder.seat,
+    responderOrder: createResponderOrder(players, fromPlayerIndex),
+    responses: [],
+    status: 'open',
+  };
+}
+
+function createResponderOrder(
+  players: readonly PlayerState[],
+  fromPlayerIndex: number,
+): ReactionWindow['responderOrder'] {
+  return SEATS.slice(1).map((_, offset) => {
+    const playerIndex = (fromPlayerIndex + offset + 1) % SEATS.length;
+    const player = players[playerIndex];
+
+    if (!player) {
+      throw new Error(`Invalid responder player index ${playerIndex}`);
+    }
+
+    return {
+      playerIndex,
+      seat: player.seat,
+    };
+  });
+}
+
+function closeReactionWindow(state: GameState): GameState {
+  const nextDrawPlayerIndex = nextPlayerIndex(
+    state.reactionWindow?.fromPlayerIndex ?? state.currentPlayerIndex,
+  );
+
+  return {
+    ...copyGameState(state),
+    currentPlayerIndex: nextDrawPlayerIndex,
+    turnStage: 'waiting-for-draw',
+    pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
+    ...(state.reactionWindow === undefined
+      ? {}
+      : { reactionWindow: { ...copyReactionWindow(state.reactionWindow), status: 'closed' } }),
+  };
+}
+
+function copyReactionWindow(reactionWindow: ReactionWindow): ReactionWindow {
+  return {
+    ...reactionWindow,
+    responderOrder: reactionWindow.responderOrder.map((responder) => ({ ...responder })),
+    responses: reactionWindow.responses.map((response) => ({ ...response })),
   };
 }
 
