@@ -13,9 +13,10 @@ export type DiscardAction =
 export type ReactionResponseType = 'pass' | 'hu' | 'peng' | 'ming-gang';
 export type SubmitReactionAction = {
   type: 'SUBMIT_REACTION';
+  playerIndex: number;
   responseType: ReactionResponseType;
 };
-export type PassReactionAction = { type: 'PASS_REACTION' };
+export type PassReactionAction = { type: 'PASS_REACTION'; playerIndex: number };
 export type ClaimReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
 export type ReactionAction = SubmitReactionAction | PassReactionAction | ClaimReactionAction;
 export type GameAction = StartGameAction | DrawAction | DiscardAction | ReactionAction;

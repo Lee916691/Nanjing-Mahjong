@@ -59,9 +59,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'DISCARDED_TILE':
       return discardReducer(state, action);
     case 'PASS_REACTION':
-      return submitReactionReducer(state, 'pass');
+      return submitReactionReducer(state, action.playerIndex, 'pass');
     case 'SUBMIT_REACTION':
-      return submitReactionReducer(state, action.responseType);
+      return submitReactionReducer(state, action.playerIndex, action.responseType);
     case 'PENG':
     case 'GANG':
     case 'HU':
@@ -220,28 +220,41 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
   };
 }
 
-export function passReactionReducer(state: GameState): GameState {
-  return submitReactionReducer(state, 'pass');
+export function passReactionReducer(state: GameState, playerIndex: number): GameState {
+  return submitReactionReducer(state, playerIndex, 'pass');
 }
 
 export function submitReactionReducer(
   state: GameState,
+  playerIndex: number,
   responseType: ReactionResponseType,
 ): GameState {
+  if (!Number.isInteger(playerIndex) || playerIndex < 0 || playerIndex >= state.players.length) {
+    return state;
+  }
+
+  const currentResponder =
+    state.reactionWindow?.responderOrder[state.reactionWindow.responses.length];
+
   if (
     state.phase !== 'playing' ||
     state.turnStage !== 'waiting-for-reaction' ||
     state.reactionWindow?.status !== 'open' ||
+    state.pendingAction.type !== 'reaction' ||
+    state.pendingAction.playerIndex !== playerIndex ||
+    currentResponder?.playerIndex !== playerIndex ||
+    state.currentPlayerIndex !== playerIndex ||
     state.reactionWindow.responses.some((response) => response.type !== 'pass')
   ) {
-    return copyGameState(state);
+    return state;
   }
 
-  const currentResponder =
-    state.reactionWindow.responderOrder[state.reactionWindow.responses.length];
+  const availability = state.reactionWindow.availableReactions.find(
+    (candidate) => candidate.playerIndex === playerIndex,
+  );
 
-  if (!currentResponder) {
-    return closeReactionWindow(state);
+  if (!availability?.responseTypes.includes(responseType)) {
+    return state;
   }
 
   const response: ReactionResponse = {
@@ -707,22 +720,6 @@ function createResponderOrder(
       seat: player.seat,
     };
   });
-}
-
-function closeReactionWindow(state: GameState): GameState {
-  const nextDrawPlayerIndex = nextPlayerIndex(
-    state.reactionWindow?.fromPlayerIndex ?? state.currentPlayerIndex,
-  );
-
-  return {
-    ...copyGameState(state),
-    currentPlayerIndex: nextDrawPlayerIndex,
-    turnStage: 'waiting-for-draw',
-    pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
-    ...(state.reactionWindow === undefined
-      ? {}
-      : { reactionWindow: { ...copyReactionWindow(state.reactionWindow), status: 'closed' } }),
-  };
 }
 
 function copyReactionWindow(reactionWindow: ReactionWindow): ReactionWindow {
