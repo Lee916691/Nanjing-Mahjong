@@ -41,6 +41,7 @@ export type {
   ReactionResponder,
   ReactionResponse,
   ReactionWindow,
+  ReactionWindowStatus,
   ScoringEventCreationStage,
   SeasonFlowerTile,
   SeasonFlowerTileId,
@@ -78,6 +79,7 @@ export type {
   PassReactionAction,
   ReactionAction,
   ReactionResponseType,
+  ResolveReactionWindowAction,
   SubmitReactionAction,
   StartGameAction,
 } from './actions';

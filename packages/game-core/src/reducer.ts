@@ -41,6 +41,7 @@ export type {
   PassReactionAction,
   ReactionAction,
   ReactionResponseType,
+  ResolveReactionWindowAction,
   SubmitReactionAction,
   StartGameAction,
 } from './actions';
@@ -62,6 +63,8 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return submitReactionReducer(state, action.playerIndex, 'pass');
     case 'SUBMIT_REACTION':
       return submitReactionReducer(state, action.playerIndex, action.responseType);
+    case 'RESOLVE_REACTION_WINDOW':
+      return resolveReactionWindowReducer(state);
     case 'PENG':
     case 'GANG':
     case 'HU':
@@ -71,7 +74,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
 
 export function drawReducer(state: GameState): GameState {
   if (state.phase !== 'playing' || state.turnStage !== 'waiting-for-draw') {
-    return copyGameState(state);
+    return state;
   }
 
   const currentPlayer = state.players[state.currentPlayerIndex];
@@ -127,7 +130,7 @@ export function drawReducer(state: GameState): GameState {
 
 export function discardReducer(state: GameState, action: DiscardAction): GameState {
   if (state.phase !== 'playing' || state.turnStage !== 'waiting-for-discard') {
-    return copyGameState(state);
+    return state;
   }
 
   const currentPlayer = state.players[state.currentPlayerIndex];
@@ -243,8 +246,7 @@ export function submitReactionReducer(
     state.pendingAction.type !== 'reaction' ||
     state.pendingAction.playerIndex !== playerIndex ||
     currentResponder?.playerIndex !== playerIndex ||
-    state.currentPlayerIndex !== playerIndex ||
-    state.reactionWindow.responses.some((response) => response.type !== 'pass')
+    state.currentPlayerIndex !== playerIndex
   ) {
     return state;
   }
@@ -267,18 +269,8 @@ export function submitReactionReducer(
   const reactionWindow: ReactionWindow = {
     ...state.reactionWindow,
     responses,
-    status: responseType === 'pass' && !nextResponder ? 'closed' : 'open',
+    status: nextResponder ? 'open' : 'awaiting-resolution',
   };
-
-  if (responseType !== 'pass') {
-    return {
-      ...copyGameState(state),
-      currentPlayerIndex: currentResponder.playerIndex,
-      turnStage: 'waiting-for-reaction',
-      pendingAction: createPendingAction(state.players, currentResponder.playerIndex, 'reaction'),
-      reactionWindow,
-    };
-  }
 
   if (nextResponder) {
     return {
@@ -290,14 +282,42 @@ export function submitReactionReducer(
     };
   }
 
-  const nextDrawPlayerIndex = nextPlayerIndex(state.reactionWindow.fromPlayerIndex);
+  return {
+    ...copyGameState(state),
+    currentPlayerIndex: currentResponder.playerIndex,
+    turnStage: 'waiting-for-reaction',
+    pendingAction: createNoPendingAction(),
+    reactionWindow,
+  };
+}
+
+export function resolveReactionWindowReducer(state: GameState): GameState {
+  const window = state.reactionWindow;
+
+  if (
+    state.phase !== 'playing' ||
+    state.turnStage !== 'waiting-for-reaction' ||
+    window?.status !== 'awaiting-resolution' ||
+    state.pendingAction.type !== 'none' ||
+    window.responses.length !== window.responderOrder.length ||
+    window.responderOrder.some(
+      (responder) =>
+        window.responses.filter((response) => response.playerIndex === responder.playerIndex)
+          .length !== 1,
+    ) ||
+    window.responses.some((response) => response.type !== 'pass')
+  ) {
+    return state;
+  }
+
+  const nextDrawPlayerIndex = nextPlayerIndex(window.fromPlayerIndex);
 
   return {
     ...copyGameState(state),
     currentPlayerIndex: nextDrawPlayerIndex,
     turnStage: 'waiting-for-draw',
     pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
-    reactionWindow,
+    reactionWindow: { ...window, status: 'closed' },
   };
 }
 export function reactionReducer(state: GameState): GameState {

@@ -47,12 +47,22 @@ import type {
   PlayerState,
   ReactionAvailability,
   ReactionWindow,
+  ReactionWindowStatus,
+  ResolveReactionWindowAction,
   RuleSetOptions,
   StartGameOptions,
   TileId,
 } from '../src';
 
 describe('Meld player state model', () => {
+  it('exports the reaction resolution status and action types', () => {
+    const reactionWindowStatus: ReactionWindowStatus = 'awaiting-resolution';
+    const resolveAction: ResolveReactionWindowAction = { type: 'RESOLVE_REACTION_WINDOW' };
+
+    expect(reactionWindowStatus).toBe('awaiting-resolution');
+    expect(resolveAction).toEqual({ type: 'RESOLVE_REACTION_WINDOW' });
+  });
+
   it('initializes melds and preserves concrete meld tiles through a draw', () => {
     const deck = createNanjingMahjongDeck();
     const meldTypes: readonly MeldType[] = ['peng', 'ming-gang', 'an-gang', 'bu-gang'];
@@ -1365,6 +1375,13 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       expect(nextState.reactionWindow?.responses).toEqual([
         { playerIndex: 1, seat: 'south', type: responseType },
       ]);
+      expect(nextState.reactionWindow?.status).toBe('open');
+      expect(nextState.currentPlayerIndex).toBe(2);
+      expect(nextState.pendingAction).toEqual({
+        playerIndex: 2,
+        seat: 'west',
+        type: 'reaction',
+      });
       expect(nextState.players.map((player) => tileIds(player.hand))).toEqual(handsBefore);
       expect(nextState.players.every((player) => player.melds.length === 0)).toBe(true);
       expect(nextState.pendingScoringEvents).toEqual(pendingScoringEvents);
@@ -1376,6 +1393,24 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
           responseType: 'pass',
         }),
       ).toBe(nextState);
+
+      const afterSecondResponse = applyAction(nextState, {
+        type: 'PASS_REACTION',
+        playerIndex: 2,
+      });
+      const afterThirdResponse = applyAction(afterSecondResponse, {
+        type: 'PASS_REACTION',
+        playerIndex: 3,
+      });
+
+      expect(afterThirdResponse.reactionWindow?.status).toBe('awaiting-resolution');
+      expect(afterThirdResponse.pendingAction.type).toBe('none');
+      expect(afterThirdResponse.players.map((player) => player.melds)).toEqual(
+        state.players.map((player) => player.melds),
+      );
+      expect(applyAction(afterThirdResponse, { type: 'RESOLVE_REACTION_WINDOW' })).toBe(
+        afterThirdResponse,
+      );
     },
   );
 
@@ -1449,7 +1484,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(nextState.turnStage).toBe('waiting-for-reaction');
     expect(nextState.pendingAction.type).toBe('reaction');
   });
-  it('closes the reaction window after three passes and waits for the discarder next player to draw', () => {
+  it('awaits resolution after three passes, then resolves to the discarder next player draw', () => {
     const deck = createNanjingMahjongDeck();
     let state = createPlayingGameWithWall([
       ordinaryTileById(deck, 'wan-2-1'),
@@ -1463,12 +1498,23 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     state = applyAction(state, { type: 'PASS_REACTION', playerIndex: 2 });
     state = applyAction(state, { type: 'PASS_REACTION', playerIndex: 3 });
 
-    expect(drawDuringReaction).toEqual(applyAction(drawDuringReaction, { type: 'DRAW_TILE' }));
+    const awaitingResolution = state;
+
+    expect(applyAction(drawDuringReaction, { type: 'DRAW_TILE' })).toEqual(drawDuringReaction);
     expect(state.reactionWindow?.responses).toEqual([
       { playerIndex: 1, seat: 'south', type: 'pass' },
       { playerIndex: 2, seat: 'west', type: 'pass' },
       { playerIndex: 3, seat: 'north', type: 'pass' },
     ]);
+    expect(state.reactionWindow?.status).toBe('awaiting-resolution');
+    expect(state.currentPlayerIndex).toBe(3);
+    expect(state.turnStage).toBe('waiting-for-reaction');
+    expect(state.pendingAction).toEqual({ playerIndex: null, seat: null, type: 'none' });
+    expect(applyAction(state, { type: 'PASS_REACTION', playerIndex: 3 })).toBe(state);
+    expect(applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' })).not.toBe(state);
+
+    state = applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' });
+
     expect(state.reactionWindow?.status).toBe('closed');
     expect(state.currentPlayerIndex).toBe(1);
     expect(state.turnStage).toBe('waiting-for-draw');
@@ -1477,8 +1523,24 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       seat: 'south',
       type: 'draw',
     });
+    expect(state.reactionWindow?.responses).toEqual(awaitingResolution.reactionWindow?.responses);
+    expect(state.lastDiscard).toEqual(awaitingResolution.lastDiscard);
+    expect(applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' })).toBe(state);
     expect(state.players.map((player) => tileIds(player.hand))).toEqual([[], [], [], []]);
     expect(tileIds(playerAt(state, 0).discardPile)).toEqual(['wan-2-1']);
+  });
+
+  it('ignores early resolution and draw or discard while awaiting reaction resolution', () => {
+    const open = createWaitingForReactionState();
+
+    expect(applyAction(open, { type: 'RESOLVE_REACTION_WINDOW' })).toBe(open);
+
+    let awaiting = applyAction(open, { type: 'PASS_REACTION', playerIndex: 1 });
+    awaiting = applyAction(awaiting, { type: 'PASS_REACTION', playerIndex: 2 });
+    awaiting = applyAction(awaiting, { type: 'PASS_REACTION', playerIndex: 3 });
+
+    expect(applyAction(awaiting, { type: 'DRAW_TILE' })).toBe(awaiting);
+    expect(applyAction(awaiting, { type: 'DISCARD_TILE', tileId: 'wan-2-2' })).toBe(awaiting);
   });
 
   it('ignores draw actions until the pending player is waiting to draw', () => {
@@ -1490,8 +1552,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     const waitingForDiscard = advanceTurn(state);
     const afterSecondDrawIntent = advanceTurn(waitingForDiscard);
 
-    expect(afterSecondDrawIntent).toEqual(waitingForDiscard);
-    expect(afterSecondDrawIntent).not.toBe(waitingForDiscard);
+    expect(afterSecondDrawIntent).toBe(waitingForDiscard);
   });
 
   it('moves a drawn flower to the flower area, draws one replacement from the tail, and waits for discard', () => {

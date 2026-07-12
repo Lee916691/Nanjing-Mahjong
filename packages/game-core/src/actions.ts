@@ -17,6 +17,8 @@ export type SubmitReactionAction = {
   responseType: ReactionResponseType;
 };
 export type PassReactionAction = { type: 'PASS_REACTION'; playerIndex: number };
+export type ResolveReactionWindowAction = { type: 'RESOLVE_REACTION_WINDOW' };
 export type ClaimReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
 export type ReactionAction = SubmitReactionAction | PassReactionAction | ClaimReactionAction;
-export type GameAction = StartGameAction | DrawAction | DiscardAction | ReactionAction;
+export type GameAction =
+  StartGameAction | DrawAction | DiscardAction | ReactionAction | ResolveReactionWindowAction;

@@ -124,6 +124,8 @@ export interface ReactionResponse {
   readonly type: ReactionResponseType;
 }
 
+export type ReactionWindowStatus = 'open' | 'awaiting-resolution' | 'closed';
+
 export interface ReactionWindow {
   readonly discardedTile: Tile;
   readonly fromPlayerIndex: number;
@@ -131,7 +133,7 @@ export interface ReactionWindow {
   readonly responderOrder: readonly ReactionResponder[];
   readonly availableReactions: readonly ReactionAvailability[];
   readonly responses: readonly ReactionResponse[];
-  readonly status: 'open' | 'closed';
+  readonly status: ReactionWindowStatus;
 }
 
 export type FlowerKongKind =
