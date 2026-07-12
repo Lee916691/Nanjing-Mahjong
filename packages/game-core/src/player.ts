@@ -1,3 +1,4 @@
+import type { Meld } from './meld';
 import type { FlowerTile, OrdinaryHandTile } from './state';
 
 export const SEATS = ['east', 'south', 'west', 'north'] as const;
@@ -8,6 +9,7 @@ export interface PlayerState {
   readonly seat: Seat;
   readonly hand: readonly OrdinaryHandTile[];
   readonly flowers: readonly FlowerTile[];
+  readonly melds: readonly Meld[];
   readonly discardPile: readonly OrdinaryHandTile[];
   readonly isDealer: boolean;
 }
@@ -18,6 +20,7 @@ export function createInitialPlayers(dealerIndex = 0): PlayerState[] {
     seat,
     hand: [],
     flowers: [],
+    melds: [],
     discardPile: [],
     isDealer: index === dealerIndex,
   }));
@@ -28,6 +31,7 @@ export function copyPlayers(players: readonly PlayerState[]): PlayerState[] {
     ...player,
     hand: [...player.hand],
     flowers: [...player.flowers],
+    melds: [...player.melds],
     discardPile: [...player.discardPile],
   }));
 }

@@ -41,6 +41,8 @@ import type {
   GameState,
   MahjongTile,
   MatchState,
+  Meld,
+  MeldType,
   OrdinaryHandTile,
   PlayerState,
   ReactionAvailability,
@@ -50,6 +52,49 @@ import type {
   TileId,
 } from '../src';
 
+describe('Meld player state model', () => {
+  it('initializes melds and preserves concrete meld tiles through a draw', () => {
+    const deck = createNanjingMahjongDeck();
+    const meldTypes: readonly MeldType[] = ['peng', 'ming-gang', 'an-gang', 'bu-gang'];
+    const meld: Meld = {
+      id: 'meld-1',
+      type: 'peng',
+      tiles: [
+        ordinaryTileById(deck, 'wan-1-1'),
+        ordinaryTileById(deck, 'wan-1-2'),
+        ordinaryTileById(deck, 'wan-1-3'),
+      ],
+      claimedTileId: 'wan-1-3',
+      fromPlayerIndex: 3,
+    };
+    const state = createPlayingGameWithWall([ordinaryTileById(deck, 'tiao-2-1')]);
+    state.players[0] = { ...state.players[0]!, melds: [meld] };
+    const nextState = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(createInitialPlayers().every((player) => player.melds.length === 0)).toBe(true);
+    expect(createGame().players.every((player) => player.melds.length === 0)).toBe(true);
+    expect(startGame(createGame()).players.every((player) => player.melds.length === 0)).toBe(true);
+    expect(meldTypes).toEqual(['peng', 'ming-gang', 'an-gang', 'bu-gang']);
+    expect(meld.tiles.map((tile) => tile.id)).toEqual(['wan-1-1', 'wan-1-2', 'wan-1-3']);
+    expect(nextState.players[0]?.melds).toEqual([meld]);
+    expect(nextState.players[0]?.flowers).toEqual([]);
+    expect(nextState.pendingScoringEvents).toEqual(state.pendingScoringEvents);
+  });
+
+  it('starts newly prepared match hands with empty melds without changing scores', () => {
+    const started = startCurrentHand(createMatch());
+    const completed = completeCurrentHand(started, {
+      dealerTransition: 'advance',
+      reason: 'normal-dealer-advance',
+    });
+    const prepared = prepareNextHand(completed);
+    const restarted = startCurrentHand(prepared);
+
+    expect(prepared.currentHand.players.every((player) => player.melds.length === 0)).toBe(true);
+    expect(restarted.currentHand.players.every((player) => player.melds.length === 0)).toBe(true);
+    expect(restarted.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+  });
+});
 function tileById(tiles: readonly MahjongTile[], id: TileId): MahjongTile {
   const tile = tiles.find((candidate) => candidate.id === id);
 
@@ -1321,7 +1366,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         { playerIndex: 1, seat: 'south', type: responseType },
       ]);
       expect(nextState.players.map((player) => tileIds(player.hand))).toEqual(handsBefore);
-      expect(nextState.players.every((player) => !('melds' in player))).toBe(true);
+      expect(nextState.players.every((player) => player.melds.length === 0)).toBe(true);
       expect(nextState.pendingScoringEvents).toEqual(pendingScoringEvents);
       expect('cumulativeScores' in nextState).toBe(false);
       expect(
