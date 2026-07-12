@@ -201,6 +201,65 @@ function createWaitingForReactionState(): GameState {
 
   return applyAction(state, { type: 'DISCARD_TILE', tileId: 'wan-2-1' });
 }
+
+function createAwaitingPengResolutionState(
+  options: {
+    matchingTileIds?: readonly TileId[];
+    nextMeldSequence?: number;
+  } = {},
+): GameState {
+  const deck = createNanjingMahjongDeck();
+  const discardedTile = ordinaryTileById(deck, 'wan-3-1');
+  const players = createInitialPlayers();
+  players[0] = { ...players[0]!, hand: [discardedTile] };
+  players[1] = {
+    ...players[1]!,
+    hand: (options.matchingTileIds ?? ['wan-3-2', 'wan-3-3']).map((id) =>
+      ordinaryTileById(deck, id),
+    ),
+  };
+  let state: GameState = {
+    ...createPlayingGameWithWall([]),
+    players,
+    nextMeldSequence: options.nextMeldSequence ?? 1,
+    turnStage: 'waiting-for-discard',
+    pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
+  };
+  state = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+  state = applyAction(state, {
+    type: 'SUBMIT_REACTION',
+    playerIndex: 1,
+    responseType: 'peng',
+  });
+  state = applyAction(state, { type: 'PASS_REACTION', playerIndex: 2 });
+  return applyAction(state, { type: 'PASS_REACTION', playerIndex: 3 });
+}
+
+function expectPengResolutionNoop(state: GameState): void {
+  const result = applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' });
+
+  expect(result).toBe(state);
+  expect(result.players.map((player) => player.hand)).toEqual(
+    state.players.map((player) => player.hand),
+  );
+  expect(result.players.map((player) => player.melds)).toEqual(
+    state.players.map((player) => player.melds),
+  );
+  expect(result.players.map((player) => player.discardPile)).toEqual(
+    state.players.map((player) => player.discardPile),
+  );
+  expect(
+    result.players.map((player) => player.discardPile.map((record) => record.claimedByMeldId)),
+  ).toEqual(
+    state.players.map((player) => player.discardPile.map((record) => record.claimedByMeldId)),
+  );
+  expect(result.nextMeldSequence).toBe(state.nextMeldSequence);
+  expect(result.lastDiscard).toBe(state.lastDiscard);
+  expect(result.reactionWindow?.status).toBe('awaiting-resolution');
+  expect(result.currentPlayerIndex).toBe(state.currentPlayerIndex);
+  expect(result.turnStage).toBe(state.turnStage);
+  expect(result.pendingAction).toBe(state.pendingAction);
+}
 describe('Nanjing Mahjong RuleSet registry', () => {
   it('registers nanjing-open as the default RuleSet shell', () => {
     const state = createGame();
@@ -1402,7 +1461,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
   });
 
   it.each(['peng', 'ming-gang'] as const)(
-    'accepts %s with three matching tiles without executing the claim',
+    'accepts %s with three matching tiles before resolution',
     (responseType) => {
       const deck = createNanjingMahjongDeck();
       const players = createInitialPlayers();
@@ -1485,9 +1544,14 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       expect(afterThirdResponse.players.map((player) => player.melds)).toEqual(
         state.players.map((player) => player.melds),
       );
-      expect(applyAction(afterThirdResponse, { type: 'RESOLVE_REACTION_WINDOW' })).toBe(
-        afterThirdResponse,
-      );
+      const resolved = applyAction(afterThirdResponse, { type: 'RESOLVE_REACTION_WINDOW' });
+
+      if (responseType === 'ming-gang') {
+        expect(resolved).toBe(afterThirdResponse);
+      } else {
+        expect(resolved).not.toBe(afterThirdResponse);
+        expect(playerAt(resolved, 1).melds[0]?.type).toBe('peng');
+      }
     },
   );
 
@@ -1607,6 +1671,379 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(tileIds(playerAt(state, 0).discardPile.map((record) => record.tile))).toEqual([
       'wan-2-1',
     ]);
+  });
+
+  it('atomically executes the only peng and preserves discard history and scoring state', () => {
+    const pendingScoringEvents: GameState['pendingScoringEvents'] = [
+      {
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        seat: 'east',
+        kind: 'red-center',
+        createdDuring: 'initial-deal',
+        status: 'pending',
+      },
+    ];
+    const awaiting = {
+      ...createAwaitingPengResolutionState({ nextMeldSequence: 7 }),
+      pendingScoringEvents,
+    };
+    const oldDiscard = playerAt(awaiting, 0).discardPile[0];
+    const result = applyAction(awaiting, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(result).not.toBe(awaiting);
+    expect(tileIds(playerAt(result, 1).hand)).toEqual([]);
+    expect(playerAt(result, 1).melds).toEqual([
+      {
+        id: 'meld-7',
+        type: 'peng',
+        tiles: [
+          expect.objectContaining({ id: 'wan-3-2' }),
+          expect.objectContaining({ id: 'wan-3-3' }),
+          expect.objectContaining({ id: 'wan-3-1' }),
+        ],
+        claimedTileId: 'wan-3-1',
+        fromPlayerIndex: 0,
+      },
+    ]);
+    expect(playerAt(result, 0).discardPile).toHaveLength(1);
+    expect(playerAt(result, 0).discardPile[0]).toEqual({
+      tile: oldDiscard?.tile,
+      claimedByMeldId: 'meld-7',
+    });
+    expect(result.lastDiscard).toBeUndefined();
+    expect(result.reactionWindow).toEqual({
+      ...awaiting.reactionWindow,
+      status: 'closed',
+    });
+    expect(result.currentPlayerIndex).toBe(1);
+    expect(result.turnStage).toBe('waiting-for-discard');
+    expect(result.pendingAction).toEqual({ playerIndex: 1, seat: 'south', type: 'discard' });
+    expect(result.nextMeldSequence).toBe(8);
+    expect(result.pendingScoringEvents).toEqual(pendingScoringEvents);
+    expect(applyAction(result, { type: 'DRAW_TILE' })).toBe(result);
+    expect(applyAction(result, { type: 'RESOLVE_REACTION_WINDOW' })).toBe(result);
+  });
+
+  it('executes meld-1 and lets the peng player discard into a new reaction window', () => {
+    const pendingScoringEvents: GameState['pendingScoringEvents'] = [
+      {
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        seat: 'east',
+        kind: 'red-center',
+        createdDuring: 'initial-deal',
+        status: 'pending',
+      },
+    ];
+    const awaiting: GameState = {
+      ...createAwaitingPengResolutionState({
+        matchingTileIds: ['wan-3-2', 'wan-3-3', 'tiao-5-1'],
+      }),
+      pendingScoringEvents,
+    };
+
+    expect(awaiting.nextMeldSequence).toBe(1);
+
+    const resolved = applyAction(awaiting, { type: 'RESOLVE_REACTION_WINDOW' });
+    const meld = playerAt(resolved, 1).melds[0];
+
+    expect(resolved.nextMeldSequence).toBe(2);
+    expect(meld).toEqual({
+      id: 'meld-1',
+      type: 'peng',
+      tiles: [
+        expect.objectContaining({ id: 'wan-3-2' }),
+        expect.objectContaining({ id: 'wan-3-3' }),
+        expect.objectContaining({ id: 'wan-3-1' }),
+      ],
+      claimedTileId: 'wan-3-1',
+      fromPlayerIndex: 0,
+    });
+    expect(playerAt(resolved, 0).discardPile[0]?.claimedByMeldId).toBe('meld-1');
+    expect(resolved.currentPlayerIndex).toBe(1);
+    expect(resolved.turnStage).toBe('waiting-for-discard');
+    expect(resolved.pendingAction).toEqual({ playerIndex: 1, seat: 'south', type: 'discard' });
+    expect(applyAction(resolved, { type: 'DRAW_TILE' })).toBe(resolved);
+
+    const discardedTile = playerAt(resolved, 1).hand[0];
+
+    if (!discardedTile) {
+      throw new Error('Missing post-peng discard tile');
+    }
+
+    const afterDiscard = applyAction(resolved, {
+      type: 'DISCARD_TILE',
+      tileId: discardedTile.id,
+    });
+
+    expect(afterDiscard).not.toBe(resolved);
+    expect(tileIds(playerAt(afterDiscard, 1).hand)).not.toContain(discardedTile.id);
+    expect(playerAt(afterDiscard, 1).discardPile).toHaveLength(
+      playerAt(resolved, 1).discardPile.length + 1,
+    );
+    expect(playerAt(afterDiscard, 1).discardPile.at(-1)).toEqual({ tile: discardedTile });
+    expect(playerAt(afterDiscard, 1).discardPile.at(-1)?.claimedByMeldId).toBeUndefined();
+    expect(afterDiscard.lastDiscard).toEqual({
+      tile: discardedTile,
+      tileId: discardedTile.id,
+      fromPlayerIndex: 1,
+      fromSeat: 'south',
+    });
+    expect(afterDiscard.reactionWindow).toMatchObject({
+      status: 'open',
+      discardedTile,
+      fromPlayerIndex: 1,
+      fromSeat: 'south',
+      responses: [],
+      responderOrder: [
+        { playerIndex: 2, seat: 'west' },
+        { playerIndex: 3, seat: 'north' },
+        { playerIndex: 0, seat: 'east' },
+      ],
+    });
+    expect(afterDiscard.turnStage).toBe('waiting-for-reaction');
+    expect(afterDiscard.pendingAction).toEqual({
+      playerIndex: 2,
+      seat: 'west',
+      type: 'reaction',
+    });
+    expect(playerAt(afterDiscard, 1).melds[0]).toEqual(meld);
+    expect(playerAt(afterDiscard, 0).discardPile[0]?.claimedByMeldId).toBe('meld-1');
+    expect(afterDiscard.nextMeldSequence).toBe(2);
+    expect(afterDiscard.pendingScoringEvents).toEqual(pendingScoringEvents);
+    expect('cumulativeScores' in afterDiscard).toBe(false);
+  });
+
+  it('selects the two lowest tile IDs for peng while preserving remaining hand order', () => {
+    const awaiting = createAwaitingPengResolutionState({
+      matchingTileIds: ['wan-3-4', 'tiao-5-1', 'wan-3-2', 'wan-3-3'],
+    });
+    const result = applyAction(awaiting, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(tileIds(playerAt(result, 1).melds[0]?.tiles ?? [])).toEqual([
+      'wan-3-2',
+      'wan-3-3',
+      'wan-3-1',
+    ]);
+    expect(tileIds(playerAt(result, 1).hand)).toEqual(['wan-3-4', 'tiao-5-1']);
+    expect(playerAt(result, 1).hand[1]).toBe(playerAt(awaiting, 1).hand[1]);
+  });
+
+  it('claims only the latest discard record and leaves earlier history unchanged', () => {
+    const deck = createNanjingMahjongDeck();
+    const awaiting = createAwaitingPengResolutionState();
+    const earlier = { tile: ordinaryTileById(deck, 'tiao-1-1') };
+    const discarder = playerAt(awaiting, 0);
+    const state: GameState = {
+      ...awaiting,
+      players: awaiting.players.map((player, index) =>
+        index === 0 ? { ...discarder, discardPile: [earlier, ...discarder.discardPile] } : player,
+      ),
+    };
+    const result = applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(playerAt(result, 0).discardPile[0]).toBe(earlier);
+    expect(playerAt(result, 0).discardPile[1]?.claimedByMeldId).toBe('meld-1');
+  });
+
+  it.each([
+    [
+      'insufficient matching tiles',
+      (state: GameState) => ({
+        ...state,
+        players: state.players.map((player, index) =>
+          index === 1 ? { ...player, hand: player.hand.slice(0, 1) } : player,
+        ),
+      }),
+    ],
+    [
+      'claimed latest discard',
+      (state: GameState) => ({
+        ...state,
+        players: state.players.map((player, index) =>
+          index === 0
+            ? {
+                ...player,
+                discardPile: player.discardPile.map((record) => ({
+                  ...record,
+                  claimedByMeldId: 'meld-old',
+                })),
+              }
+            : player,
+        ),
+      }),
+    ],
+    [
+      'missing lastDiscard',
+      (state: GameState) => {
+        const withoutLastDiscard = { ...state };
+        delete withoutLastDiscard.lastDiscard;
+        return withoutLastDiscard;
+      },
+    ],
+    [
+      'mismatched lastDiscard source',
+      (state: GameState) => ({
+        ...state,
+        lastDiscard: { ...state.lastDiscard!, fromPlayerIndex: 2 },
+      }),
+    ],
+    ['non-positive sequence', (state: GameState) => ({ ...state, nextMeldSequence: 0 })],
+    ['negative sequence', (state: GameState) => ({ ...state, nextMeldSequence: -1 })],
+    ['non-integer sequence', (state: GameState) => ({ ...state, nextMeldSequence: 1.5 })],
+    [
+      'mismatched lastDiscard tile',
+      (state: GameState) => {
+        const deck = createNanjingMahjongDeck();
+
+        if (!state.lastDiscard) {
+          throw new Error('Missing lastDiscard for mismatch test');
+        }
+
+        return {
+          ...state,
+          lastDiscard: {
+            ...state.lastDiscard,
+            tile: ordinaryTileById(deck, 'tiao-1-1'),
+          },
+        };
+      },
+    ],
+    [
+      'latest discard record does not match target',
+      (state: GameState) => {
+        const deck = createNanjingMahjongDeck();
+        const discarder = playerAt(state, 0);
+
+        return {
+          ...state,
+          players: state.players.map((player, index) =>
+            index === 0
+              ? {
+                  ...discarder,
+                  discardPile: [
+                    ...discarder.discardPile,
+                    { tile: ordinaryTileById(deck, 'tiao-1-1') },
+                  ],
+                }
+              : player,
+          ),
+        };
+      },
+    ],
+    [
+      'availability does not contain peng',
+      (state: GameState) => {
+        const window = state.reactionWindow;
+
+        if (!window) {
+          throw new Error('Missing reaction window for availability test');
+        }
+
+        return {
+          ...state,
+          reactionWindow: {
+            ...window,
+            availableReactions: window.availableReactions.map((availability) =>
+              availability.playerIndex === 1
+                ? { ...availability, responseTypes: ['pass'] as const }
+                : availability,
+            ),
+          },
+        };
+      },
+    ],
+    [
+      'two peng responses',
+      (state: GameState) => {
+        const window = state.reactionWindow;
+
+        if (!window) {
+          throw new Error('Missing reaction window for two peng test');
+        }
+
+        return {
+          ...state,
+          reactionWindow: {
+            ...window,
+            responses: window.responses.map((response, index) =>
+              index === 1 ? { ...response, type: 'peng' as const } : response,
+            ),
+          },
+        };
+      },
+    ],
+    [
+      'response contains hu',
+      (state: GameState) => {
+        const window = state.reactionWindow;
+
+        if (!window) {
+          throw new Error('Missing reaction window for hu test');
+        }
+
+        return {
+          ...state,
+          reactionWindow: {
+            ...window,
+            responses: window.responses.map((response, index) =>
+              index === 0 ? { ...response, type: 'hu' as const } : response,
+            ),
+          },
+        };
+      },
+    ],
+    [
+      'three non-pass responses',
+      (state: GameState) => {
+        const window = state.reactionWindow;
+        const responseTypes = ['peng', 'ming-gang', 'peng'] as const;
+
+        if (!window) {
+          throw new Error('Missing reaction window for three non-pass test');
+        }
+
+        return {
+          ...state,
+          reactionWindow: {
+            ...window,
+            responses: window.responses.map((response, index) => ({
+              ...response,
+              type: responseTypes[index] ?? 'peng',
+            })),
+          },
+        };
+      },
+    ],
+    [
+      'multiple non-pass responses',
+      (state: GameState) => ({
+        ...state,
+        reactionWindow: {
+          ...state.reactionWindow!,
+          responses: state.reactionWindow!.responses.map((response, index) =>
+            index === 1 ? { ...response, type: 'ming-gang' as const } : response,
+          ),
+        },
+      }),
+    ],
+    [
+      'unsupported ming-gang',
+      (state: GameState) => ({
+        ...state,
+        reactionWindow: {
+          ...state.reactionWindow!,
+          responses: state.reactionWindow!.responses.map((response) =>
+            response.type === 'peng' ? { ...response, type: 'ming-gang' as const } : response,
+          ),
+        },
+      }),
+    ],
+  ] as const)('returns the original state for invalid peng resolution: %s', (_name, alter) => {
+    const state = alter(createAwaitingPengResolutionState());
+
+    expectPengResolutionNoop(state);
   });
 
   it('ignores early resolution and draw or discard while awaiting reaction resolution', () => {

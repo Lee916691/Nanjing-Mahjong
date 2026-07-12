@@ -11,6 +11,7 @@ import {
   PLANT_FLOWER_KINDS,
   SEASON_FLOWER_KINDS,
   WIND_TILE_KINDS,
+  isSameOrdinaryTileFace,
 } from './state';
 import type {
   DrawTileFromWallResult,
@@ -307,9 +308,18 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
       (responder) =>
         window.responses.filter((response) => response.playerIndex === responder.playerIndex)
           .length !== 1,
-    ) ||
-    window.responses.some((response) => response.type !== 'pass')
+    )
   ) {
+    return state;
+  }
+
+  const nonPassResponses = window.responses.filter((response) => response.type !== 'pass');
+
+  if (nonPassResponses.length === 1 && nonPassResponses[0]?.type === 'peng') {
+    return resolvePeng(state, window, nonPassResponses[0]);
+  }
+
+  if (nonPassResponses.length !== 0) {
     return state;
   }
 
@@ -321,6 +331,102 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
     turnStage: 'waiting-for-draw',
     pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
     reactionWindow: { ...window, status: 'closed' },
+  };
+}
+
+function resolvePeng(
+  state: GameState,
+  window: ReactionWindow,
+  response: ReactionResponse,
+): GameState {
+  const pengPlayerIndex = response.playerIndex;
+  const pengPlayer = state.players[pengPlayerIndex];
+  const discarder = state.players[window.fromPlayerIndex];
+  const lastDiscard = state.lastDiscard;
+  const discardedTile = window.discardedTile;
+  const latestDiscardRecord = discarder?.discardPile.at(-1);
+
+  if (
+    !Number.isInteger(pengPlayerIndex) ||
+    pengPlayerIndex < 0 ||
+    pengPlayerIndex >= state.players.length ||
+    !pengPlayer ||
+    response.seat !== pengPlayer.seat ||
+    !discarder ||
+    window.fromPlayerIndex === pengPlayerIndex ||
+    window.fromSeat !== discarder.seat ||
+    !isOrdinaryHandTile(discardedTile) ||
+    !window.availableReactions.some(
+      (availability) =>
+        availability.playerIndex === pengPlayerIndex &&
+        availability.seat === pengPlayer.seat &&
+        availability.responseTypes.includes('peng'),
+    ) ||
+    !lastDiscard ||
+    lastDiscard.tile.id !== discardedTile.id ||
+    lastDiscard.tileId !== discardedTile.id ||
+    lastDiscard.fromPlayerIndex !== window.fromPlayerIndex ||
+    lastDiscard.fromSeat !== window.fromSeat ||
+    !latestDiscardRecord ||
+    latestDiscardRecord.tile.id !== discardedTile.id ||
+    latestDiscardRecord.claimedByMeldId !== undefined ||
+    !Number.isInteger(state.nextMeldSequence) ||
+    state.nextMeldSequence <= 0
+  ) {
+    return state;
+  }
+
+  const matchingTiles = pengPlayer.hand
+    .filter((tile) => isSameOrdinaryTileFace(tile, discardedTile))
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+  const selectedTiles = matchingTiles.slice(0, 2);
+
+  if (selectedTiles.length !== 2) {
+    return state;
+  }
+
+  const meldId = `meld-${state.nextMeldSequence}`;
+  const selectedTileIds = new Set(selectedTiles.map((tile) => tile.id));
+  const meld = {
+    id: meldId,
+    type: 'peng' as const,
+    tiles: [...selectedTiles, discardedTile],
+    claimedTileId: discardedTile.id,
+    fromPlayerIndex: window.fromPlayerIndex,
+  };
+  const players = state.players.map((player, playerIndex) => {
+    if (playerIndex === pengPlayerIndex) {
+      return {
+        ...player,
+        hand: player.hand.filter((tile) => !selectedTileIds.has(tile.id)),
+        melds: [...player.melds, meld],
+      };
+    }
+
+    if (playerIndex === window.fromPlayerIndex) {
+      return {
+        ...player,
+        discardPile: player.discardPile.map((record, recordIndex) =>
+          recordIndex === player.discardPile.length - 1
+            ? { ...record, claimedByMeldId: meldId }
+            : record,
+        ),
+      };
+    }
+
+    return player;
+  });
+  const stateWithoutLastDiscard = { ...state };
+  delete stateWithoutLastDiscard.lastDiscard;
+
+  return {
+    ...stateWithoutLastDiscard,
+    players,
+    currentPlayerIndex: pengPlayerIndex,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, pengPlayerIndex, 'discard'),
+    reactionWindow: { ...window, status: 'closed' },
+    nextMeldSequence: state.nextMeldSequence + 1,
   };
 }
 export function reactionReducer(state: GameState): GameState {

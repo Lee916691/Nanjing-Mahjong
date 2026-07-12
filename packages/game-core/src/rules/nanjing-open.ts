@@ -6,6 +6,7 @@ import type {
   ReactionAvailability,
   ReactionWindow,
 } from '../state';
+import { isSameOrdinaryTileFace } from '../state';
 import type { RuleSet } from './RuleSet';
 
 export const NANJING_OPEN_RULE_SET: RuleSet = {
@@ -55,16 +56,4 @@ function getNanjingOpenAvailableReactions(
 
 function isOrdinaryHandTile(tile: MahjongTile): tile is OrdinaryHandTile {
   return tile.category === 'number' || tile.category === 'wind';
-}
-
-function isSameOrdinaryTileFace(left: OrdinaryHandTile, right: OrdinaryHandTile): boolean {
-  if (left.category === 'number' && right.category === 'number') {
-    return left.suit === right.suit && left.rank === right.rank;
-  }
-
-  if (left.category === 'wind' && right.category === 'wind') {
-    return left.wind === right.wind;
-  }
-
-  return false;
 }

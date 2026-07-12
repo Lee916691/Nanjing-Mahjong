@@ -89,6 +89,14 @@ export type OrdinaryHandTile = NumberTile | WindTile;
 export type MahjongTile = OrdinaryHandTile | FlowerTile;
 export type Tile = MahjongTile;
 
+export function isSameOrdinaryTileFace(left: OrdinaryHandTile, right: OrdinaryHandTile): boolean {
+  if (left.category === 'number' && right.category === 'number') {
+    return left.suit === right.suit && left.rank === right.rank;
+  }
+
+  return left.category === 'wind' && right.category === 'wind' && left.wind === right.wind;
+}
+
 export type GamePhase = 'ready' | 'playing' | 'ended';
 export type TurnStage =
   'waiting-for-draw' | 'waiting-for-discard' | 'waiting-for-reaction' | 'hand-ended';
