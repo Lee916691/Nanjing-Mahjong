@@ -35,6 +35,7 @@ import {
   startMatch,
 } from '../src';
 import type {
+  DiscardRecord,
   FlowerTile,
   GameCreationOptions,
   GameAction,
@@ -101,8 +102,27 @@ describe('Meld player state model', () => {
     const restarted = startCurrentHand(prepared);
 
     expect(prepared.currentHand.players.every((player) => player.melds.length === 0)).toBe(true);
+    expect(prepared.currentHand.nextMeldSequence).toBe(1);
     expect(restarted.currentHand.players.every((player) => player.melds.length === 0)).toBe(true);
     expect(restarted.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+  });
+
+  it('preserves discard claim history and meld sequence through unrelated updates', () => {
+    const deck = createNanjingMahjongDeck();
+    const claimedRecord: DiscardRecord = {
+      tile: ordinaryTileById(deck, 'wan-1-1'),
+      claimedByMeldId: 'meld-6',
+    };
+    const state: GameState = {
+      ...createPlayingGameWithWall([ordinaryTileById(deck, 'tiao-2-1')]),
+      nextMeldSequence: 7,
+    };
+    state.players[0] = { ...state.players[0]!, discardPile: [claimedRecord] };
+
+    const nextState = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(nextState.nextMeldSequence).toBe(7);
+    expect(nextState.players[0]?.discardPile).toEqual([claimedRecord]);
   });
 });
 function tileById(tiles: readonly MahjongTile[], id: TileId): MahjongTile {
@@ -153,6 +173,7 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
   const players = createInitialPlayers();
 
   return {
+    nextMeldSequence: 1,
     ruleSetId: DEFAULT_RULE_SET_ID,
     players,
     wall: [...wall],
@@ -456,6 +477,10 @@ describe('Nanjing Mahjong match state', () => {
     expect(nextHandMatch.currentHand.players.map((player) => player.hand.length)).toEqual([
       0, 0, 0, 0,
     ]);
+    expect(
+      nextHandMatch.currentHand.players.every((player) => player.discardPile.length === 0),
+    ).toBe(true);
+    expect(nextHandMatch.currentHand.nextMeldSequence).toBe(1);
   });
 
   it('starts the prepared current hand without changing cumulative scores', () => {
@@ -538,6 +563,8 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       type: 'draw',
     });
     expect(firstGame.pendingScoringEvents).toEqual([]);
+    expect(firstGame.nextMeldSequence).toBe(1);
+    expect(firstGame.players.every((player) => player.discardPile.length === 0)).toBe(true);
   });
 
   it('starts a ready game by dealing complete ordinary opening hands', () => {
@@ -553,6 +580,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(playingGame.players.map((player) => player.hand.length)).toEqual([14, 13, 13, 13]);
     expect(playingGame.players.every((player) => player.hand.every(isOrdinaryHandTile))).toBe(true);
     expect(playingGame.players.every((player) => player.flowers.length === 0)).toBe(true);
+    expect(playingGame.players.every((player) => player.discardPile.length === 0)).toBe(true);
     expect(playingGame.wall).toHaveLength(91);
     expect(playingGame.currentPlayerIndex).toBe(0);
     expect(playingGame.dealerIndex).toBe(0);
@@ -563,6 +591,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       type: 'discard',
     });
     expect(playingGame.pendingScoringEvents).toEqual([]);
+    expect(playingGame.nextMeldSequence).toBe(1);
     expect(readyGame.phase).toBe('ready');
     expect(readyGame.players.every((player) => player.hand.length === 0)).toBe(true);
   });
@@ -582,7 +611,10 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
 
     expect(playingGame.turnStage).toBe('waiting-for-discard');
     expect(playingGame.pendingAction.type).toBe('discard');
-    expect(tileIds(playerAt(nextState, 0).discardPile)).toEqual([dealerTile.id]);
+    const discardRecord = playerAt(nextState, 0).discardPile[0];
+    expect(discardRecord?.tile).toBe(dealerTile);
+    expect(discardRecord?.tile.id).toBe(dealerTile.id);
+    expect(discardRecord?.claimedByMeldId).toBeUndefined();
     expect(nextState.currentPlayerIndex).toBe(1);
     expect(nextState.turnStage).toBe('waiting-for-reaction');
     expect(nextState.pendingAction).toEqual({
@@ -609,6 +641,43 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       status: 'open',
     });
   });
+
+  it('appends a discard record after existing claimed history', () => {
+    const deck = createNanjingMahjongDeck();
+    const playingGame = startGame(createGame());
+    const dealer = playerAt(playingGame, playingGame.dealerIndex);
+    const discardedTile = dealer.hand[0];
+    const oldRecord: DiscardRecord = {
+      tile: ordinaryTileById(deck, 'wind-north-4'),
+      claimedByMeldId: 'meld-6',
+    };
+
+    if (!discardedTile) {
+      throw new Error('Expected dealer to have a tile to discard');
+    }
+
+    playingGame.players[playingGame.dealerIndex] = {
+      ...dealer,
+      discardPile: [oldRecord],
+    };
+
+    const nextState = applyAction(playingGame, {
+      type: 'DISCARD_TILE',
+      tileId: discardedTile.id,
+    });
+    const discardPile = playerAt(nextState, playingGame.dealerIndex).discardPile;
+
+    expect(discardPile).toHaveLength(2);
+    expect(discardPile[0]).toBe(oldRecord);
+    expect(discardPile.map((record) => record.tile)).toEqual([oldRecord.tile, discardedTile]);
+    expect(discardPile.map((record) => record.tile.id)).toEqual([
+      oldRecord.tile.id,
+      discardedTile.id,
+    ]);
+    expect(discardPile[0]?.claimedByMeldId).toBe('meld-6');
+    expect(discardPile[1]?.claimedByMeldId).toBeUndefined();
+  });
+
   it('moves flowers from the initial deal into the flower area and replaces from the tail', () => {
     const deck = createNanjingMahjongDeck();
     const dealtFlower = flowerTileById(deck, 'flower-red-center-1');
@@ -917,6 +986,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       },
     ];
     const state: GameState = {
+      nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
@@ -935,7 +1005,9 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     const nextState = applyAction(state, action);
 
     expect(tileIds(playerAt(nextState, 0).hand)).toEqual(['wind-east-1']);
-    expect(tileIds(playerAt(nextState, 0).discardPile)).toEqual(['wan-1-1']);
+    expect(tileIds(playerAt(nextState, 0).discardPile.map((record) => record.tile))).toEqual([
+      'wan-1-1',
+    ]);
     expect(nextState.lastDiscard).toEqual({
       tile: discardedTile,
       tileId: discardedTile.id,
@@ -991,6 +1063,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       hand: [ordinaryTileById(deck, 'wan-3-2'), ordinaryTileById(deck, 'wan-3-3')],
     };
     const state: GameState = {
+      nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
@@ -1047,6 +1120,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       ],
     };
     const state: GameState = {
+      nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
@@ -1091,6 +1165,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       ],
     };
     const state: GameState = {
+      nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
@@ -1133,6 +1208,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       status: 'open',
     };
     const state: GameState = {
+      nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
@@ -1203,6 +1279,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       hand: [discardedTile],
     };
     const state: GameState = {
+      nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
       wall: [],
@@ -1527,7 +1604,9 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(state.lastDiscard).toEqual(awaitingResolution.lastDiscard);
     expect(applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' })).toBe(state);
     expect(state.players.map((player) => tileIds(player.hand))).toEqual([[], [], [], []]);
-    expect(tileIds(playerAt(state, 0).discardPile)).toEqual(['wan-2-1']);
+    expect(tileIds(playerAt(state, 0).discardPile.map((record) => record.tile))).toEqual([
+      'wan-2-1',
+    ]);
   });
 
   it('ignores early resolution and draw or discard while awaiting reaction resolution', () => {

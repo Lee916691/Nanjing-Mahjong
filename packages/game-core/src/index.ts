@@ -68,7 +68,7 @@ export {
 export type { RuleSet, RuleSetId } from './rules';
 
 export { SEATS, createInitialPlayers } from './player';
-export type { PlayerState, Seat } from './player';
+export type { DiscardRecord, PlayerState, Seat } from './player';
 export type { Meld, MeldType } from './meld';
 
 export type {

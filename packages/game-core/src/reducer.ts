@@ -112,6 +112,7 @@ export function drawReducer(state: GameState): GameState {
   };
 
   const nextState: GameState = {
+    nextMeldSequence: state.nextMeldSequence,
     ruleSetId: state.ruleSetId,
     players,
     wall: [...drawResolution.wall.tiles],
@@ -164,7 +165,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
       ...copiedPlayer.hand.slice(0, discardedTileIndex),
       ...copiedPlayer.hand.slice(discardedTileIndex + 1),
     ],
-    discardPile: [...copiedPlayer.discardPile, discardedTile],
+    discardPile: [...copiedPlayer.discardPile, { tile: discardedTile }],
   };
 
   const reactionWindowShell = createReactionWindow(
@@ -186,6 +187,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     fromSeat: copiedPlayer.seat,
   };
   const stateForAvailability: GameState = {
+    nextMeldSequence: state.nextMeldSequence,
     ruleSetId: state.ruleSetId,
     players,
     wall: [...state.wall],
@@ -209,6 +211,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
   };
 
   return {
+    nextMeldSequence: state.nextMeldSequence,
     ruleSetId: state.ruleSetId,
     players,
     wall: [...state.wall],
@@ -331,6 +334,7 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
   const players = createInitialPlayers(dealerIndex);
 
   return {
+    nextMeldSequence: 1,
     ruleSetId: ruleSet.id,
     players,
     wall: createNanjingMahjongDeck(),
@@ -357,6 +361,7 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
   const players = createInitialPlayers(dealerIndex);
 
   return dealInitialHands({
+    nextMeldSequence: state.nextMeldSequence,
     ruleSetId: ruleSet.id,
     players,
     wall: [...state.wall],
@@ -685,6 +690,7 @@ export function createNanjingMahjongDeck(): MahjongTile[] {
 
 function copyGameState(state: GameState): GameState {
   return {
+    nextMeldSequence: state.nextMeldSequence,
     ruleSetId: state.ruleSetId,
     players: copyPlayers(state.players),
     wall: [...state.wall],

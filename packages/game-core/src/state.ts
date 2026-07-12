@@ -153,6 +153,7 @@ export interface PendingFlowerKongScoringEvent {
 export type PendingScoringEvent = PendingFlowerKongScoringEvent;
 
 export interface GameState {
+  readonly nextMeldSequence: number;
   ruleSetId: RuleSetId;
   players: PlayerState[];
   wall: Tile[];

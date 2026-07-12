@@ -1,6 +1,11 @@
 import type { Meld } from './meld';
 import type { FlowerTile, OrdinaryHandTile } from './state';
 
+export interface DiscardRecord {
+  readonly tile: OrdinaryHandTile;
+  readonly claimedByMeldId?: string;
+}
+
 export const SEATS = ['east', 'south', 'west', 'north'] as const;
 export type Seat = (typeof SEATS)[number];
 
@@ -10,7 +15,7 @@ export interface PlayerState {
   readonly hand: readonly OrdinaryHandTile[];
   readonly flowers: readonly FlowerTile[];
   readonly melds: readonly Meld[];
-  readonly discardPile: readonly OrdinaryHandTile[];
+  readonly discardPile: readonly DiscardRecord[];
   readonly isDealer: boolean;
 }
 
