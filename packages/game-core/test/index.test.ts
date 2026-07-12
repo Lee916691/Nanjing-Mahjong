@@ -125,6 +125,605 @@ describe('Meld player state model', () => {
     expect(nextState.players[0]?.discardPile).toEqual([claimedRecord]);
   });
 });
+
+describe('MingGang reaction execution', () => {
+  it('atomically creates the meld, claims the discard, draws from the tail, and appends scoring', () => {
+    const deck = createNanjingMahjongDeck();
+    const oldEvent = {
+      type: 'flower-kong-created' as const,
+      playerIndex: 0,
+      seat: 'east' as const,
+      kind: 'red-center' as const,
+      createdDuring: 'initial-deal' as const,
+      status: 'pending' as const,
+    };
+    const awaiting = createAwaitingMingGangResolutionState({
+      matchingTileIds: ['wan-3-4', 'tiao-6-1', 'wan-3-2', 'wan-3-3'],
+      wall: [ordinaryTileById(deck, 'tong-8-1'), ordinaryTileById(deck, 'tiao-5-1')],
+      nextMeldSequence: 7,
+      pendingScoringEvents: [oldEvent],
+    });
+    const oldRecord = playerAt(awaiting, 0).discardPile[0];
+    const result = applyAction(awaiting, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(result).not.toBe(awaiting);
+    expect(tileIds(playerAt(result, 1).hand)).toEqual(['tiao-6-1', 'tiao-5-1']);
+    expect(playerAt(result, 1).melds).toEqual([
+      {
+        id: 'meld-7',
+        type: 'ming-gang',
+        tiles: [
+          expect.objectContaining({ id: 'wan-3-2' }),
+          expect.objectContaining({ id: 'wan-3-3' }),
+          expect.objectContaining({ id: 'wan-3-4' }),
+          expect.objectContaining({ id: 'wan-3-1' }),
+        ],
+        claimedTileId: 'wan-3-1',
+        fromPlayerIndex: 0,
+      },
+    ]);
+    expect(playerAt(result, 0).discardPile).toHaveLength(1);
+    expect(playerAt(result, 0).discardPile[0]).toEqual({
+      tile: oldRecord?.tile,
+      claimedByMeldId: 'meld-7',
+    });
+    expect(tileIds(result.wall)).toEqual(['tong-8-1']);
+    expect(result.lastDiscard).toBeUndefined();
+    expect(result.reactionWindow).toEqual({ ...awaiting.reactionWindow, status: 'closed' });
+    expect(result.currentPlayerIndex).toBe(1);
+    expect(result.turnStage).toBe('waiting-for-discard');
+    expect(result.pendingAction).toEqual({ playerIndex: 1, seat: 'south', type: 'discard' });
+    expect(result.nextMeldSequence).toBe(8);
+    expect(result.pendingScoringEvents).toEqual([
+      oldEvent,
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 1,
+        payerPlayerIndex: 0,
+        amount: 20,
+        meldId: 'meld-7',
+        status: 'pending',
+      },
+    ]);
+    expect('cumulativeScores' in result).toBe(false);
+    expect(applyAction(result, { type: 'DRAW_TILE' })).toBe(result);
+  });
+
+  it('replaces consecutive tail flowers and appends a newly formed runtime flower kong', () => {
+    const deck = createNanjingMahjongDeck();
+    const oldEvent = {
+      type: 'flower-kong-created' as const,
+      playerIndex: 0,
+      seat: 'east' as const,
+      kind: 'fortune' as const,
+      createdDuring: 'initial-deal' as const,
+      status: 'pending' as const,
+    };
+    const awaiting = createAwaitingMingGangResolutionState({
+      wall: [
+        ordinaryTileById(deck, 'tong-8-1'),
+        ordinaryTileById(deck, 'tiao-5-1'),
+        flowerTileById(deck, 'season-winter-1'),
+        flowerTileById(deck, 'flower-red-center-4'),
+      ],
+      flowers: ['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+        flowerTileById(deck, id as TileId),
+      ),
+      pendingScoringEvents: [oldEvent],
+    });
+    const result = applyAction(awaiting, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(tileIds(result.wall)).toEqual(['tong-8-1']);
+    expect(tileIds(playerAt(result, 1).flowers)).toEqual([
+      'flower-red-center-1',
+      'flower-red-center-2',
+      'flower-red-center-3',
+      'flower-red-center-4',
+      'season-winter-1',
+    ]);
+    expect(tileIds(playerAt(result, 1).hand)).toEqual(['tiao-5-1']);
+    expect(result.pendingScoringEvents.map((event) => event.type)).toEqual([
+      'flower-kong-created',
+      'ming-gang-created',
+      'flower-kong-created',
+    ]);
+    expect(result.pendingScoringEvents[2]).toEqual({
+      type: 'flower-kong-created',
+      playerIndex: 1,
+      seat: 'south',
+      kind: 'red-center',
+      createdDuring: 'runtime-flower-replacement',
+      status: 'pending',
+    });
+  });
+
+  it('keeps a successful gang when the only tail tile is a flower, but suppresses its final flower-kong event', () => {
+    const deck = createNanjingMahjongDeck();
+    const awaiting = createAwaitingMingGangResolutionState({
+      wall: [flowerTileById(deck, 'flower-red-center-4')],
+      flowers: ['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+        flowerTileById(deck, id as TileId),
+      ),
+    });
+    const result = applyAction(awaiting, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(result).not.toBe(awaiting);
+    expect(result.phase).toBe('ended');
+    expect(result.turnStage).toBe('hand-ended');
+    expect(result.pendingAction).toEqual({ playerIndex: null, seat: null, type: 'none' });
+    expect(result.currentPlayerIndex).toBe(1);
+    expect(result.wall).toEqual([]);
+    expect(tileIds(playerAt(result, 1).flowers)).toContain('flower-red-center-4');
+    expect(playerAt(result, 1).melds[0]?.type).toBe('ming-gang');
+    expect(playerAt(result, 0).discardPile[0]?.claimedByMeldId).toBe('meld-1');
+    expect(result.pendingScoringEvents).toEqual([
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 1,
+        payerPlayerIndex: 0,
+        amount: 20,
+        meldId: 'meld-1',
+        status: 'pending',
+      },
+    ]);
+    expect(result.nextMeldSequence).toBe(2);
+    expect(result.lastDiscard).toBeUndefined();
+    expect(result.reactionWindow?.status).toBe('closed');
+  });
+
+  it.each([
+    ['empty wall', (state: GameState) => ({ ...state, wall: [] })],
+    [
+      'insufficient matching tiles',
+      (state: GameState) => ({
+        ...state,
+        players: state.players.map((player, index) =>
+          index === 1 ? { ...player, hand: player.hand.slice(0, 2) } : player,
+        ),
+      }),
+    ],
+    [
+      'availability excludes ming-gang',
+      (state: GameState) => ({
+        ...state,
+        reactionWindow: {
+          ...state.reactionWindow!,
+          availableReactions: state.reactionWindow!.availableReactions.map((availability) =>
+            availability.playerIndex === 1
+              ? { ...availability, responseTypes: ['pass', 'peng'] as const }
+              : availability,
+          ),
+        },
+      }),
+    ],
+    [
+      'claimed discard',
+      (state: GameState) => ({
+        ...state,
+        players: state.players.map((player, index) =>
+          index === 0
+            ? {
+                ...player,
+                discardPile: player.discardPile.map((record) => ({
+                  ...record,
+                  claimedByMeldId: 'meld-old',
+                })),
+              }
+            : player,
+        ),
+      }),
+    ],
+    [
+      'mismatched latest discard',
+      (state: GameState) => {
+        const deck = createNanjingMahjongDeck();
+        return {
+          ...state,
+          players: state.players.map((player, index) =>
+            index === 0
+              ? {
+                  ...player,
+                  discardPile: [
+                    ...player.discardPile,
+                    { tile: ordinaryTileById(deck, 'tiao-1-1') },
+                  ],
+                }
+              : player,
+          ),
+        };
+      },
+    ],
+    [
+      'missing last discard',
+      (state: GameState) => {
+        const next = { ...state };
+        delete next.lastDiscard;
+        return next;
+      },
+    ],
+    ['zero sequence', (state: GameState) => ({ ...state, nextMeldSequence: 0 })],
+    ['negative sequence', (state: GameState) => ({ ...state, nextMeldSequence: -1 })],
+    ['fractional sequence', (state: GameState) => ({ ...state, nextMeldSequence: 1.5 })],
+    [
+      'two ming-gang responses',
+      (state: GameState) => ({
+        ...state,
+        reactionWindow: {
+          ...state.reactionWindow!,
+          responses: state.reactionWindow!.responses.map((response, index) =>
+            index === 1 ? { ...response, type: 'ming-gang' as const } : response,
+          ),
+        },
+      }),
+    ],
+    [
+      'peng and ming-gang responses',
+      (state: GameState) => ({
+        ...state,
+        reactionWindow: {
+          ...state.reactionWindow!,
+          responses: state.reactionWindow!.responses.map((response, index) =>
+            index === 1 ? { ...response, type: 'peng' as const } : response,
+          ),
+        },
+      }),
+    ],
+    [
+      'hu response',
+      (state: GameState) => ({
+        ...state,
+        reactionWindow: {
+          ...state.reactionWindow!,
+          responses: state.reactionWindow!.responses.map((response, index) =>
+            index === 1 ? { ...response, type: 'hu' as const } : response,
+          ),
+        },
+      }),
+    ],
+  ] as const)('returns the original state without partial updates for %s', (_name, alter) => {
+    expectMingGangResolutionNoop(alter(createAwaitingMingGangResolutionState()));
+  });
+
+  it('records the same runtime flower-kong event during a normal draw replacement', () => {
+    const deck = createNanjingMahjongDeck();
+    const state = createPlayingGameWithWall([
+      flowerTileById(deck, 'flower-red-center-4'),
+      ordinaryTileById(deck, 'tiao-5-1'),
+    ]);
+    state.players[0] = {
+      ...state.players[0]!,
+      flowers: ['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+        flowerTileById(deck, id as TileId),
+      ),
+    };
+    const result = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(tileIds(playerAt(result, 0).hand)).toEqual(['tiao-5-1']);
+    expect(result.pendingScoringEvents).toEqual([
+      {
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        seat: 'east',
+        kind: 'red-center',
+        createdDuring: 'runtime-flower-replacement',
+        status: 'pending',
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      'duplicate selected hand tile IDs',
+      (state: GameState) => {
+        const player = playerAt(state, 1);
+        const duplicatedTile = player.hand[0];
+
+        if (!duplicatedTile) {
+          throw new Error('Missing tile for duplicate ID test');
+        }
+
+        return {
+          ...state,
+          players: state.players.map((candidate, index) =>
+            index === 1
+              ? { ...candidate, hand: [duplicatedTile, duplicatedTile, ...player.hand.slice(1, 2)] }
+              : candidate,
+          ),
+        };
+      },
+    ],
+    [
+      'selected hand tile ID matches the discard ID',
+      (state: GameState) => {
+        const player = playerAt(state, 1);
+        const discardedTile = state.reactionWindow?.discardedTile;
+
+        if (!discardedTile || !isOrdinaryHandTile(discardedTile)) {
+          throw new Error('Missing ordinary discarded tile for ID conflict test');
+        }
+
+        return {
+          ...state,
+          players: state.players.map((candidate, index) =>
+            index === 1
+              ? { ...candidate, hand: [discardedTile, ...player.hand.slice(0, 2)] }
+              : candidate,
+          ),
+        };
+      },
+    ],
+  ] as const)('rejects corrupt MingGang state with %s', (_name, corrupt) => {
+    const state = corrupt(createAwaitingMingGangResolutionState());
+    const result = applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' });
+
+    expect(result).toBe(state);
+    expect(result.players).toBe(state.players);
+    expect(result.players.map((player) => player.hand)).toEqual(
+      state.players.map((player) => player.hand),
+    );
+    expect(result.players.map((player) => player.flowers)).toEqual(
+      state.players.map((player) => player.flowers),
+    );
+    expect(result.players.map((player) => player.melds)).toEqual(
+      state.players.map((player) => player.melds),
+    );
+    expect(result.players.map((player) => player.discardPile)).toEqual(
+      state.players.map((player) => player.discardPile),
+    );
+    expect(result.wall).toBe(state.wall);
+    expect(result.pendingScoringEvents).toBe(state.pendingScoringEvents);
+    expect(result.nextMeldSequence).toBe(state.nextMeldSequence);
+    expect(result.lastDiscard).toBe(state.lastDiscard);
+    expect(result.reactionWindow).toBe(state.reactionWindow);
+    expect(result.reactionWindow?.status).toBe('awaiting-resolution');
+    expect(result.currentPlayerIndex).toBe(state.currentPlayerIndex);
+    expect(result.turnStage).toBe(state.turnStage);
+    expect(result.pendingAction).toBe(state.pendingAction);
+  });
+
+  it('preserves pending events and public player state when a normal tile is drawn', () => {
+    const deck = createNanjingMahjongDeck();
+    const pendingScoringEvents: GameState['pendingScoringEvents'] = [
+      {
+        type: 'flower-kong-created',
+        playerIndex: 1,
+        seat: 'south',
+        kind: 'fortune',
+        createdDuring: 'initial-deal',
+        status: 'pending',
+      },
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 2,
+        payerPlayerIndex: 0,
+        amount: 20,
+        meldId: 'meld-old',
+        status: 'pending',
+      },
+    ];
+    const state: GameState = {
+      ...createPlayingGameWithWall([
+        ordinaryTileById(deck, 'wan-1-1'),
+        ordinaryTileById(deck, 'tiao-2-1'),
+      ]),
+      pendingScoringEvents,
+    };
+    const originalPlayer = playerAt(state, 0);
+    const result = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(tileIds(playerAt(result, 0).hand)).toEqual(['wan-1-1']);
+    expect(tileIds(result.wall)).toEqual(['tiao-2-1']);
+    expect(result.currentPlayerIndex).toBe(0);
+    expect(result.turnStage).toBe('waiting-for-discard');
+    expect(result.pendingAction).toEqual({ playerIndex: 0, seat: 'east', type: 'discard' });
+    expect(playerAt(result, 0).flowers).toEqual(originalPlayer.flowers);
+    expect(playerAt(result, 0).melds).toEqual(originalPlayer.melds);
+    expect(playerAt(result, 0).discardPile).toEqual(originalPlayer.discardPile);
+    expect(result.reactionWindow).toBeUndefined();
+    expect(result.pendingScoringEvents).toEqual(pendingScoringEvents);
+    expect(result.pendingScoringEvents.every((event) => event.status === 'pending')).toBe(true);
+    expect('cumulativeScores' in result).toBe(false);
+  });
+
+  it.each(['initial-deal', 'runtime-flower-replacement'] as const)(
+    'does not duplicate a flower kong already recorded during %s',
+    (createdDuring) => {
+      const deck = createNanjingMahjongDeck();
+      const existingEvent = {
+        type: 'flower-kong-created' as const,
+        playerIndex: 0,
+        seat: 'east' as const,
+        kind: 'red-center' as const,
+        createdDuring,
+        status: 'pending' as const,
+      };
+      const state: GameState = {
+        ...createPlayingGameWithWall([
+          flowerTileById(deck, 'flower-red-center-4'),
+          ordinaryTileById(deck, 'tong-8-1'),
+          ordinaryTileById(deck, 'tiao-5-1'),
+        ]),
+        pendingScoringEvents: [existingEvent],
+      };
+      state.players[0] = {
+        ...state.players[0]!,
+        flowers: ['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+          flowerTileById(deck, id as TileId),
+        ),
+      };
+      const result = applyAction(state, { type: 'DRAW_TILE' });
+
+      expect(result.pendingScoringEvents).toEqual([existingEvent]);
+      expect(result.pendingScoringEvents[0]).toBe(existingEvent);
+    },
+  );
+
+  it('preserves tail replacement order and appends runtime flower kongs in formation order', () => {
+    const deck = createNanjingMahjongDeck();
+    const history = {
+      type: 'ming-gang-created' as const,
+      receiverPlayerIndex: 2,
+      payerPlayerIndex: 3,
+      amount: 20 as const,
+      meldId: 'meld-old',
+      status: 'pending' as const,
+    };
+    const state: GameState = {
+      ...createPlayingGameWithWall([
+        flowerTileById(deck, 'season-spring-1'),
+        ordinaryTileById(deck, 'tong-8-1'),
+        ordinaryTileById(deck, 'tiao-5-1'),
+        flowerTileById(deck, 'flower-chrysanthemum-1'),
+        flowerTileById(deck, 'flower-red-center-4'),
+      ]),
+      pendingScoringEvents: [history],
+    };
+    state.players[0] = {
+      ...state.players[0]!,
+      flowers: [
+        ...['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+          flowerTileById(deck, id as TileId),
+        ),
+        ...['flower-plum-1', 'flower-orchid-1', 'flower-bamboo-1'].map((id) =>
+          flowerTileById(deck, id as TileId),
+        ),
+      ],
+    };
+    const result = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(tileIds(playerAt(result, 0).flowers).slice(-3)).toEqual([
+      'season-spring-1',
+      'flower-red-center-4',
+      'flower-chrysanthemum-1',
+    ]);
+    expect(tileIds(playerAt(result, 0).hand)).toEqual(['tiao-5-1']);
+    expect(tileIds(result.wall)).toEqual(['tong-8-1']);
+    expect(result.currentPlayerIndex).toBe(0);
+    expect(result.turnStage).toBe('waiting-for-discard');
+    expect(result.pendingAction).toEqual({ playerIndex: 0, seat: 'east', type: 'discard' });
+    expect(result.reactionWindow).toBeUndefined();
+    expect(result.pendingScoringEvents).toEqual([
+      history,
+      expect.objectContaining({ kind: 'red-center', status: 'pending' }),
+      expect.objectContaining({ kind: 'plum-orchid-bamboo-chrysanthemum', status: 'pending' }),
+    ]);
+  });
+
+  it('suppresses a flower kong formed by the final flower of an exhausted normal draw chain', () => {
+    const deck = createNanjingMahjongDeck();
+    const history = {
+      type: 'flower-kong-created' as const,
+      playerIndex: 2,
+      seat: 'west' as const,
+      kind: 'fortune' as const,
+      createdDuring: 'initial-deal' as const,
+      status: 'pending' as const,
+    };
+    const state: GameState = {
+      ...createPlayingGameWithWall([
+        flowerTileById(deck, 'season-spring-1'),
+        flowerTileById(deck, 'flower-red-center-4'),
+      ]),
+      pendingScoringEvents: [history],
+    };
+    state.players[0] = {
+      ...state.players[0]!,
+      flowers: ['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+        flowerTileById(deck, id as TileId),
+      ),
+    };
+    const result = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(result.phase).toBe('ended');
+    expect(result.turnStage).toBe('hand-ended');
+    expect(result.wall).toEqual([]);
+    expect(tileIds(playerAt(result, 0).flowers).slice(-2)).toEqual([
+      'season-spring-1',
+      'flower-red-center-4',
+    ]);
+    expect(result.pendingScoringEvents).toEqual([history]);
+    expect(playerAt(result, 0).melds).toEqual(playerAt(state, 0).melds);
+    expect(playerAt(result, 0).discardPile).toEqual(playerAt(state, 0).discardPile);
+    expect('cumulativeScores' in result).toBe(false);
+  });
+
+  it('keeps an earlier runtime flower kong while suppressing the final exhausted flower', () => {
+    const deck = createNanjingMahjongDeck();
+    const history = {
+      type: 'ming-gang-created' as const,
+      receiverPlayerIndex: 2,
+      payerPlayerIndex: 1,
+      amount: 20 as const,
+      meldId: 'meld-old',
+      status: 'pending' as const,
+    };
+    const state: GameState = {
+      ...createPlayingGameWithWall([
+        flowerTileById(deck, 'season-spring-1'),
+        flowerTileById(deck, 'flower-chrysanthemum-1'),
+        flowerTileById(deck, 'flower-red-center-4'),
+      ]),
+      pendingScoringEvents: [history],
+    };
+    state.players[0] = {
+      ...state.players[0]!,
+      flowers: [
+        ...['flower-red-center-1', 'flower-red-center-2', 'flower-red-center-3'].map((id) =>
+          flowerTileById(deck, id as TileId),
+        ),
+        ...['flower-plum-1', 'flower-orchid-1', 'flower-bamboo-1'].map((id) =>
+          flowerTileById(deck, id as TileId),
+        ),
+      ],
+    };
+    const result = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(result.phase).toBe('ended');
+    expect(result.wall).toEqual([]);
+    expect(tileIds(playerAt(result, 0).flowers).slice(-3)).toEqual([
+      'season-spring-1',
+      'flower-red-center-4',
+      'flower-chrysanthemum-1',
+    ]);
+    expect(result.pendingScoringEvents).toEqual([
+      history,
+      expect.objectContaining({
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        kind: 'red-center',
+        createdDuring: 'runtime-flower-replacement',
+        status: 'pending',
+      }),
+    ]);
+  });
+
+  it('preserves pending events when a normal draw starts with an empty wall', () => {
+    const pendingScoringEvents: GameState['pendingScoringEvents'] = [
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 1,
+        payerPlayerIndex: 0,
+        amount: 20,
+        meldId: 'meld-old',
+        status: 'pending',
+      },
+    ];
+    const state: GameState = {
+      ...createPlayingGameWithWall([]),
+      pendingScoringEvents,
+    };
+    const result = applyAction(state, { type: 'DRAW_TILE' });
+
+    expect(result.phase).toBe('ended');
+    expect(result.turnStage).toBe('hand-ended');
+    expect(result.pendingAction).toEqual({ playerIndex: null, seat: null, type: 'none' });
+    expect(result.pendingScoringEvents).toEqual(pendingScoringEvents);
+    expect(playerAt(result, 0).flowers).toEqual(playerAt(state, 0).flowers);
+    expect(playerAt(result, 0).melds).toEqual(playerAt(state, 0).melds);
+    expect(playerAt(result, 0).discardPile).toEqual(playerAt(state, 0).discardPile);
+    expect('cumulativeScores' in result).toBe(false);
+  });
+});
 function tileById(tiles: readonly MahjongTile[], id: TileId): MahjongTile {
   const tile = tiles.find((candidate) => candidate.id === id);
 
@@ -233,6 +832,56 @@ function createAwaitingPengResolutionState(
   });
   state = applyAction(state, { type: 'PASS_REACTION', playerIndex: 2 });
   return applyAction(state, { type: 'PASS_REACTION', playerIndex: 3 });
+}
+
+function createAwaitingMingGangResolutionState(
+  options: {
+    matchingTileIds?: readonly TileId[];
+    wall?: readonly MahjongTile[];
+    nextMeldSequence?: number;
+    flowers?: readonly FlowerTile[];
+    pendingScoringEvents?: GameState['pendingScoringEvents'];
+  } = {},
+): GameState {
+  const deck = createNanjingMahjongDeck();
+  const discardedTile = ordinaryTileById(deck, 'wan-3-1');
+  const players = createInitialPlayers();
+  players[0] = { ...players[0]!, hand: [discardedTile] };
+  players[1] = {
+    ...players[1]!,
+    hand: (options.matchingTileIds ?? ['wan-3-4', 'wan-3-2', 'wan-3-3']).map((id) =>
+      ordinaryTileById(deck, id),
+    ),
+    flowers: options.flowers ?? [],
+  };
+  let state: GameState = {
+    ...createPlayingGameWithWall(options.wall ?? [ordinaryTileById(deck, 'tiao-5-1')]),
+    players,
+    nextMeldSequence: options.nextMeldSequence ?? 1,
+    turnStage: 'waiting-for-discard',
+    pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
+    pendingScoringEvents: options.pendingScoringEvents ?? [],
+  };
+  state = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+  state = applyAction(state, {
+    type: 'SUBMIT_REACTION',
+    playerIndex: 1,
+    responseType: 'ming-gang',
+  });
+  state = applyAction(state, { type: 'PASS_REACTION', playerIndex: 2 });
+  return applyAction(state, { type: 'PASS_REACTION', playerIndex: 3 });
+}
+
+function expectMingGangResolutionNoop(state: GameState): void {
+  const result = applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' });
+
+  expect(result).toBe(state);
+  expect(result.players).toBe(state.players);
+  expect(result.wall).toBe(state.wall);
+  expect(result.pendingScoringEvents).toBe(state.pendingScoringEvents);
+  expect(result.nextMeldSequence).toBe(state.nextMeldSequence);
+  expect(result.lastDiscard).toBe(state.lastDiscard);
+  expect(result.reactionWindow).toBe(state.reactionWindow);
 }
 
 function expectPengResolutionNoop(state: GameState): void {

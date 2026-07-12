@@ -122,7 +122,14 @@ export function drawReducer(state: GameState): GameState {
     phase: state.phase,
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, state.currentPlayerIndex, 'discard'),
-    pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+    pendingScoringEvents: appendRuntimeFlowerKongEvents(
+      state.pendingScoringEvents ?? [],
+      currentPlayer,
+      state.currentPlayerIndex,
+      currentPlayer.flowers,
+      drawResolution.newlyRevealedFlowers,
+      drawResolution.status === 'wall-exhausted',
+    ),
   };
 
   return drawResolution.status === 'wall-exhausted' || drawResolution.wall.tiles.length === 0
@@ -319,6 +326,10 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
     return resolvePeng(state, window, nonPassResponses[0]);
   }
 
+  if (nonPassResponses.length === 1 && nonPassResponses[0]?.type === 'ming-gang') {
+    return resolveMingGang(state, window, nonPassResponses[0]);
+  }
+
   if (nonPassResponses.length !== 0) {
     return state;
   }
@@ -332,6 +343,143 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
     pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
     reactionWindow: { ...window, status: 'closed' },
   };
+}
+
+function resolveMingGang(
+  state: GameState,
+  window: ReactionWindow,
+  response: ReactionResponse,
+): GameState {
+  const playerIndex = response.playerIndex;
+  const player = state.players[playerIndex];
+  const discarder = state.players[window.fromPlayerIndex];
+  const discardedTile = window.discardedTile;
+  const lastDiscard = state.lastDiscard;
+  const latestDiscard = discarder?.discardPile.at(-1);
+
+  if (
+    !Number.isInteger(playerIndex) ||
+    playerIndex < 0 ||
+    playerIndex >= state.players.length ||
+    !player ||
+    response.seat !== player.seat ||
+    !discarder ||
+    window.fromPlayerIndex === playerIndex ||
+    window.fromSeat !== discarder.seat ||
+    !isOrdinaryHandTile(discardedTile) ||
+    !window.availableReactions.some(
+      (availability) =>
+        availability.playerIndex === playerIndex &&
+        availability.seat === player.seat &&
+        availability.responseTypes.includes('ming-gang'),
+    ) ||
+    !lastDiscard ||
+    lastDiscard.tile.id !== discardedTile.id ||
+    lastDiscard.tileId !== discardedTile.id ||
+    lastDiscard.fromPlayerIndex !== window.fromPlayerIndex ||
+    lastDiscard.fromSeat !== window.fromSeat ||
+    !latestDiscard ||
+    latestDiscard.tile.id !== discardedTile.id ||
+    latestDiscard.claimedByMeldId !== undefined ||
+    !Number.isInteger(state.nextMeldSequence) ||
+    state.nextMeldSequence <= 0 ||
+    state.wall.length === 0
+  ) {
+    return state;
+  }
+
+  const selectedTiles = player.hand
+    .filter((tile) => isSameOrdinaryTileFace(tile, discardedTile))
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+    .slice(0, 3);
+
+  if (selectedTiles.length !== 3) {
+    return state;
+  }
+
+  const selectedIds = new Set(selectedTiles.map((tile) => tile.id));
+
+  if (selectedIds.size !== 3 || selectedIds.has(discardedTile.id)) {
+    return state;
+  }
+
+  const tailDraw = drawTileFromWallTail(createTileWall(state.wall));
+
+  if (tailDraw.status === 'wall-exhausted') {
+    return state;
+  }
+
+  const drawResolution = resolveDrawnTileWithFlowerReplacement(
+    player.hand.filter((tile) => !selectedIds.has(tile.id)),
+    player.flowers,
+    tailDraw.tile,
+    tailDraw.wall,
+  );
+  const meldId = `meld-${state.nextMeldSequence}`;
+  const meld = {
+    id: meldId,
+    type: 'ming-gang' as const,
+    tiles: [...selectedTiles, discardedTile],
+    claimedTileId: discardedTile.id,
+    fromPlayerIndex: window.fromPlayerIndex,
+  };
+  const players = state.players.map((candidate, index) => {
+    if (index === playerIndex) {
+      return {
+        ...candidate,
+        hand: [...drawResolution.hand],
+        flowers: [...drawResolution.flowers],
+        melds: [...candidate.melds, meld],
+      };
+    }
+
+    if (index === window.fromPlayerIndex) {
+      return {
+        ...candidate,
+        discardPile: candidate.discardPile.map((record, recordIndex) =>
+          recordIndex === candidate.discardPile.length - 1
+            ? { ...record, claimedByMeldId: meldId }
+            : record,
+        ),
+      };
+    }
+
+    return candidate;
+  });
+  const scoringEvents: PendingScoringEvent[] = [
+    ...state.pendingScoringEvents,
+    {
+      type: 'ming-gang-created',
+      receiverPlayerIndex: playerIndex,
+      payerPlayerIndex: window.fromPlayerIndex,
+      amount: 20,
+      meldId,
+      status: 'pending',
+    },
+  ];
+  const pendingScoringEvents = appendRuntimeFlowerKongEvents(
+    scoringEvents,
+    player,
+    playerIndex,
+    player.flowers,
+    drawResolution.newlyRevealedFlowers,
+    drawResolution.status === 'wall-exhausted',
+  );
+  const nextState: GameState = {
+    nextMeldSequence: state.nextMeldSequence + 1,
+    ruleSetId: state.ruleSetId,
+    players,
+    wall: [...drawResolution.wall.tiles],
+    currentPlayerIndex: playerIndex,
+    dealerIndex: state.dealerIndex,
+    phase: state.phase,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, playerIndex, 'discard'),
+    reactionWindow: { ...window, status: 'closed' },
+    pendingScoringEvents,
+  };
+
+  return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
 }
 
 function resolvePeng(
@@ -618,7 +766,10 @@ function appendFlowerKongEvents(
 
   for (const kind of findFlowerKongKinds(flowers)) {
     const alreadyRecorded = nextEvents.some(
-      (event) => event.playerIndex === playerIndex && event.kind === kind,
+      (event) =>
+        event.type === 'flower-kong-created' &&
+        event.playerIndex === playerIndex &&
+        event.kind === kind,
     );
 
     if (!alreadyRecorded) {
@@ -630,6 +781,35 @@ function appendFlowerKongEvents(
         createdDuring,
         status: 'pending',
       });
+    }
+  }
+
+  return nextEvents;
+}
+
+function appendRuntimeFlowerKongEvents(
+  events: readonly PendingScoringEvent[],
+  player: PlayerState,
+  playerIndex: number,
+  previousFlowers: readonly FlowerTile[],
+  newlyRevealedFlowers: readonly FlowerTile[],
+  suppressFinalFlower: boolean,
+): PendingScoringEvent[] {
+  let nextEvents = [...events];
+  const flowers = [...previousFlowers];
+  const eventFlowerCount = newlyRevealedFlowers.length - (suppressFinalFlower ? 1 : 0);
+
+  for (const [index, flower] of newlyRevealedFlowers.entries()) {
+    flowers.push(flower);
+
+    if (index < eventFlowerCount) {
+      nextEvents = appendFlowerKongEvents(
+        nextEvents,
+        player,
+        playerIndex,
+        flowers,
+        'runtime-flower-replacement',
+      );
     }
   }
 

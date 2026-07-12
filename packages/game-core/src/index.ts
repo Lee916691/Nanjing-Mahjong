@@ -34,6 +34,7 @@ export type {
   PendingAction,
   PendingActionType,
   PendingFlowerKongScoringEvent,
+  PendingMingGangScoringEvent,
   PendingScoringEvent,
   LastDiscard,
   PlantFlowerKind,

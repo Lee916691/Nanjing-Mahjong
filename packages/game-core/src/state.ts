@@ -147,7 +147,8 @@ export interface ReactionWindow {
 export type FlowerKongKind =
   FourCopyFlowerKind | 'plum-orchid-bamboo-chrysanthemum' | 'spring-summer-autumn-winter';
 
-export type ScoringEventCreationStage = 'initial-deal' | 'initial-flower-replacement';
+export type ScoringEventCreationStage =
+  'initial-deal' | 'initial-flower-replacement' | 'runtime-flower-replacement';
 
 export interface PendingFlowerKongScoringEvent {
   readonly type: 'flower-kong-created';
@@ -158,7 +159,16 @@ export interface PendingFlowerKongScoringEvent {
   readonly status: 'pending';
 }
 
-export type PendingScoringEvent = PendingFlowerKongScoringEvent;
+export interface PendingMingGangScoringEvent {
+  readonly type: 'ming-gang-created';
+  readonly receiverPlayerIndex: number;
+  readonly payerPlayerIndex: number;
+  readonly amount: 20;
+  readonly meldId: string;
+  readonly status: 'pending';
+}
+
+export type PendingScoringEvent = PendingFlowerKongScoringEvent | PendingMingGangScoringEvent;
 
 export interface GameState {
   readonly nextMeldSequence: number;
