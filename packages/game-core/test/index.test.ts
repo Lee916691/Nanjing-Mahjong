@@ -966,9 +966,12 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         availability.responseTypes.includes('hu'),
       ),
     ).toBe(false);
+    expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).not.toContain(
+      'ming-gang',
+    );
   });
 
-  it('marks ming-gang available for three matching ordinary tiles without executing it', () => {
+  it('offers peng and ming-gang for three matching ordinary tiles without executing either', () => {
     const deck = createNanjingMahjongDeck();
     const discardedTile = ordinaryTileById(deck, 'tong-6-1');
     const players = createInitialPlayers();
@@ -1001,7 +1004,11 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
-    expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).toContain('ming-gang');
+    expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).toEqual([
+      'pass',
+      'peng',
+      'ming-gang',
+    ]);
     expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).not.toContain('hu');
     expect(playerAt(nextState, 1).hand).toEqual(playerAt(state, 1).hand);
     expect(playerAt(nextState, 1).discardPile).toEqual([]);
@@ -1022,7 +1029,11 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     players[0] = { ...eastPlayer, hand: [discardedTile] };
     players[1] = {
       ...southPlayer,
-      hand: [ordinaryTileById(deck, 'wind-east-2'), ordinaryTileById(deck, 'wind-east-3')],
+      hand: [
+        ordinaryTileById(deck, 'wind-east-2'),
+        ordinaryTileById(deck, 'wind-east-3'),
+        ordinaryTileById(deck, 'wind-east-4'),
+      ],
     };
     const state: GameState = {
       ruleSetId: DEFAULT_RULE_SET_ID,
@@ -1040,6 +1051,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(nextState.reactionWindow?.availableReactions[0]?.responseTypes).toEqual([
       'pass',
       'peng',
+      'ming-gang',
     ]);
   });
 

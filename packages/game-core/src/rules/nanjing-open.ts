@@ -36,7 +36,7 @@ function getNanjingOpenAvailableReactions(
         isSameOrdinaryTileFace(tile, discardedTile),
       ).length;
 
-      if (matchingTileCount === 2) {
+      if (matchingTileCount >= 2) {
         responseTypes.push('peng');
       }
 
