@@ -19,6 +19,14 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
   getMingGangScoreTransfers: ({ receiverPlayerIndex, payerPlayerIndex }) => [
     { fromPlayerIndex: payerPlayerIndex, toPlayerIndex: receiverPlayerIndex, amount: 20 },
   ],
+  getAnGangScoreTransfers: ({ playerIndex, playerCount }) =>
+    Array.from({ length: playerCount }, (_, payerPlayerIndex) => payerPlayerIndex)
+      .filter((payerPlayerIndex) => payerPlayerIndex !== playerIndex)
+      .map((payerPlayerIndex) => ({
+        fromPlayerIndex: payerPlayerIndex,
+        toPlayerIndex: playerIndex,
+        amount: 10,
+      })),
   getFlowerKongScoreTransfers: ({ playerIndex, playerCount }) =>
     Array.from({ length: playerCount }, (_, payerPlayerIndex) => payerPlayerIndex)
       .filter((payerPlayerIndex) => payerPlayerIndex !== playerIndex)

@@ -29,10 +29,12 @@ export type {
   NumberTileRank,
   NumberTileSuit,
   OrdinaryHandTile,
+  OrdinaryTileFace,
   PlantFlowerTile,
   PlantFlowerTileId,
   PendingAction,
   PendingActionType,
+  PendingAnGangScoringEvent,
   PendingFlowerKongScoringEvent,
   PendingMingGangScoringEvent,
   PendingScoringEvent,
@@ -67,7 +69,13 @@ export {
   getRuleSet,
   listRuleSets,
 } from './rules';
-export type { FlowerKongScoringContext, MingGangScoringContext, RuleSet, RuleSetId } from './rules';
+export type {
+  AnGangScoringContext,
+  FlowerKongScoringContext,
+  MingGangScoringContext,
+  RuleSet,
+  RuleSetId,
+} from './rules';
 
 export { SEATS, createInitialPlayers } from './player';
 export type { DiscardRecord, PlayerState, Seat } from './player';
@@ -75,6 +83,7 @@ export type { Meld, MeldType } from './meld';
 
 export type {
   ClaimReactionAction,
+  DeclareAnGangAction,
   DiscardAction,
   DrawAction,
   GameAction,
@@ -93,6 +102,7 @@ export {
   createTileWall,
   drawTileFromWallHead,
   drawTileFromWallTail,
+  getAvailableAnGangs,
   isFlowerTile,
   isNumberTile,
   isOrdinaryHandTile,

@@ -1,7 +1,12 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player';
 import type { PlayerState } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
-import type { DiscardAction, GameAction, ReactionResponseType } from './actions';
+import type {
+  DeclareAnGangAction,
+  DiscardAction,
+  GameAction,
+  ReactionResponseType,
+} from './actions';
 import type { GameCreationOptions, StartGameOptions } from './options';
 import {
   FOUR_COPY_FLOWER_KINDS,
@@ -22,6 +27,7 @@ import type {
   GameState,
   MahjongTile,
   NumberTile,
+  OrdinaryTileFace,
   OrdinaryHandTile,
   PendingAction,
   PendingScoringEvent,
@@ -36,6 +42,7 @@ import type {
 
 export type {
   ClaimReactionAction,
+  DeclareAnGangAction,
   DiscardAction,
   DrawAction,
   GameAction,
@@ -66,11 +73,116 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return submitReactionReducer(state, action.playerIndex, action.responseType);
     case 'RESOLVE_REACTION_WINDOW':
       return resolveReactionWindowReducer(state);
+    case 'DECLARE_AN_GANG':
+      return declareAnGangReducer(state, action);
     case 'PENG':
     case 'GANG':
     case 'HU':
       return reactionReducer(state);
   }
+}
+
+export function getAvailableAnGangs(state: GameState, playerIndex: number): OrdinaryTileFace[] {
+  if (!isAnGangTurn(state, playerIndex)) return [];
+  const player = state.players[playerIndex];
+  if (!player || !Array.isArray(player.hand) || !player.hand.every(isValidOrdinaryTile)) return [];
+
+  const faces: OrdinaryTileFace[] = [];
+  for (const tile of player.hand) {
+    const tileFace = ordinaryTileFace(tile);
+    if (faces.some((candidate) => isSameOrdinaryTileFaceValue(candidate, tileFace))) continue;
+    const candidates = matchingAnGangTiles(player.hand, tileFace);
+    if (
+      candidates.length >= 4 &&
+      new Set(candidates.map((candidate) => candidate.id)).size === candidates.length
+    ) {
+      faces.push(tileFace);
+    }
+  }
+
+  return faces.sort(compareOrdinaryTileFaces).map((tileFace) => ({ ...tileFace }));
+}
+
+export function declareAnGangReducer(state: GameState, action: DeclareAnGangAction): GameState {
+  if (
+    !Number.isInteger(state.nextMeldSequence) ||
+    state.nextMeldSequence <= 0 ||
+    !isValidOrdinaryTileFace(action.tileFace) ||
+    !getAvailableAnGangs(state, action.playerIndex).some((tileFace) =>
+      isSameOrdinaryTileFaceValue(tileFace, action.tileFace),
+    )
+  ) {
+    return state;
+  }
+
+  const player = state.players[action.playerIndex];
+  if (!player) return state;
+  const candidates = matchingAnGangTiles(player.hand, action.tileFace).sort(compareTilesById);
+  if (new Set(candidates.map((tile) => tile.id)).size !== candidates.length) return state;
+  const selectedTiles = candidates.slice(0, 4);
+  if (selectedTiles.length !== 4) return state;
+
+  const tailDraw = drawTileFromWallTail(createTileWall(state.wall));
+  if (tailDraw.status === 'wall-exhausted') return state;
+  const selectedIds = new Set(selectedTiles.map((tile) => tile.id));
+  const drawResolution = resolveDrawnTileWithFlowerReplacement(
+    player.hand.filter((tile) => !selectedIds.has(tile.id)),
+    player.flowers,
+    tailDraw.tile,
+    tailDraw.wall,
+  );
+  const meldId = `meld-${state.nextMeldSequence}`;
+  const transfers = getRuleSet(state.ruleSetId)
+    .getAnGangScoreTransfers({
+      playerIndex: action.playerIndex,
+      playerCount: state.players.length,
+      meldId,
+    })
+    .map((transfer) => ({ ...transfer }));
+  const scoringEvents: PendingScoringEvent[] = [
+    ...state.pendingScoringEvents,
+    {
+      type: 'an-gang-created',
+      playerIndex: action.playerIndex,
+      meldId,
+      transfers,
+      status: 'pending',
+    },
+  ];
+  const players = state.players.map((candidate, index) =>
+    index === action.playerIndex
+      ? {
+          ...candidate,
+          hand: [...drawResolution.hand],
+          flowers: [...drawResolution.flowers],
+          melds: [
+            ...candidate.melds,
+            { id: meldId, type: 'an-gang' as const, tiles: [...selectedTiles] },
+          ],
+        }
+      : candidate,
+  );
+  const pendingScoringEvents = appendRuntimeFlowerKongEvents(
+    state.ruleSetId,
+    scoringEvents,
+    player,
+    action.playerIndex,
+    player.flowers,
+    drawResolution.newlyRevealedFlowers,
+    drawResolution.status === 'wall-exhausted',
+  );
+  const nextState: GameState = {
+    ...state,
+    nextMeldSequence: state.nextMeldSequence + 1,
+    players,
+    wall: [...drawResolution.wall.tiles],
+    currentPlayerIndex: action.playerIndex,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, action.playerIndex, 'discard'),
+    pendingScoringEvents,
+  };
+
+  return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
 }
 
 export function drawReducer(state: GameState): GameState {
@@ -1101,6 +1213,91 @@ function markHandEnded(state: GameState): GameState {
 
 function nextPlayerIndex(currentPlayerIndex: number): number {
   return (currentPlayerIndex + 1) % SEATS.length;
+}
+
+function isAnGangTurn(state: GameState, playerIndex: number): boolean {
+  const player = state.players[playerIndex];
+  const reactionWindow = state.reactionWindow;
+  const followsMingGang =
+    reactionWindow?.status === 'closed' &&
+    reactionWindow.responses.some((response) => response.type === 'ming-gang');
+
+  return (
+    state.players.length === SEATS.length &&
+    Number.isInteger(playerIndex) &&
+    playerIndex >= 0 &&
+    playerIndex < state.players.length &&
+    playerIndex === state.currentPlayerIndex &&
+    state.phase === 'playing' &&
+    state.turnStage === 'waiting-for-discard' &&
+    state.pendingAction.type === 'discard' &&
+    state.pendingAction.playerIndex === playerIndex &&
+    state.pendingAction.seat === player?.seat &&
+    state.wall.length > 0 &&
+    (reactionWindow === undefined || followsMingGang)
+  );
+}
+
+function ordinaryTileFace(tile: OrdinaryHandTile): OrdinaryTileFace {
+  return tile.category === 'number'
+    ? { category: 'number', suit: tile.suit, rank: tile.rank }
+    : { category: 'wind', wind: tile.wind };
+}
+
+function isSameOrdinaryTileFaceValue(left: OrdinaryTileFace, right: OrdinaryTileFace): boolean {
+  return left.category === 'number' && right.category === 'number'
+    ? left.suit === right.suit && left.rank === right.rank
+    : left.category === 'wind' && right.category === 'wind' && left.wind === right.wind;
+}
+
+function matchingAnGangTiles(
+  hand: readonly OrdinaryHandTile[],
+  tileFace: OrdinaryTileFace,
+): OrdinaryHandTile[] {
+  return hand.filter((tile) => isSameOrdinaryTileFaceValue(ordinaryTileFace(tile), tileFace));
+}
+
+function compareTilesById(left: OrdinaryHandTile, right: OrdinaryHandTile): number {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
+function compareOrdinaryTileFaces(left: OrdinaryTileFace, right: OrdinaryTileFace): number {
+  const key = (tileFace: OrdinaryTileFace): number => {
+    if (tileFace.category === 'wind') return 100 + WIND_TILE_KINDS.indexOf(tileFace.wind);
+    return NUMBER_TILE_SUITS.indexOf(tileFace.suit) * 10 + tileFace.rank;
+  };
+  return key(left) - key(right);
+}
+
+function isValidOrdinaryTileFace(tileFace: unknown): tileFace is OrdinaryTileFace {
+  if (!isRecord(tileFace)) return false;
+  if (tileFace.category === 'number') {
+    return (
+      NUMBER_TILE_SUITS.some((suit) => suit === tileFace.suit) &&
+      NUMBER_TILE_RANKS.some((rank) => rank === tileFace.rank)
+    );
+  }
+  return tileFace.category === 'wind' && WIND_TILE_KINDS.some((wind) => wind === tileFace.wind);
+}
+
+function isValidOrdinaryTile(tile: unknown): tile is OrdinaryHandTile {
+  if (!isRecord(tile) || !FOUR_COPY_INDEXES.some((copy) => copy === tile.copy)) return false;
+  if (tile.category === 'number') {
+    return (
+      NUMBER_TILE_SUITS.some((suit) => suit === tile.suit) &&
+      NUMBER_TILE_RANKS.some((rank) => rank === tile.rank) &&
+      tile.id === `${tile.suit}-${tile.rank}-${tile.copy}`
+    );
+  }
+  return (
+    tile.category === 'wind' &&
+    WIND_TILE_KINDS.some((wind) => wind === tile.wind) &&
+    tile.id === `wind-${tile.wind}-${tile.copy}`
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function createWallExhaustedResult(wall: TileWall): DrawTileFromWallResult {

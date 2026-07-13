@@ -23,6 +23,7 @@ export function listRuleSets(): RuleSet[] {
 
 export { NANJING_OPEN_RULE_SET } from './nanjing-open';
 export type {
+  AnGangScoringContext,
   FlowerKongScoringContext,
   MingGangScoringContext,
   RuleSet,

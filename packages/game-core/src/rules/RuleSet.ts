@@ -17,6 +17,12 @@ export interface MingGangScoringContext {
   readonly meldId: string;
 }
 
+export interface AnGangScoringContext {
+  readonly playerIndex: number;
+  readonly playerCount: number;
+  readonly meldId: string;
+}
+
 export interface FlowerKongScoringContext {
   readonly playerIndex: number;
   readonly playerCount: number;
@@ -35,6 +41,7 @@ export interface RuleSet {
     reactionWindow: ReactionWindow,
   ) => readonly ReactionAvailability[];
   readonly getMingGangScoreTransfers: (context: MingGangScoringContext) => readonly ScoreTransfer[];
+  readonly getAnGangScoreTransfers: (context: AnGangScoringContext) => readonly ScoreTransfer[];
   readonly getFlowerKongScoreTransfers: (
     context: FlowerKongScoringContext,
   ) => readonly ScoreTransfer[];

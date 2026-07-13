@@ -1,5 +1,6 @@
 import type { Seat } from './player';
 import type { RuleSetId } from './rules/RuleSet';
+import type { OrdinaryTileFace } from './state';
 
 export type StartGameAction = {
   type: 'START_GAME';
@@ -18,7 +19,17 @@ export type SubmitReactionAction = {
 };
 export type PassReactionAction = { type: 'PASS_REACTION'; playerIndex: number };
 export type ResolveReactionWindowAction = { type: 'RESOLVE_REACTION_WINDOW' };
+export type DeclareAnGangAction = {
+  type: 'DECLARE_AN_GANG';
+  playerIndex: number;
+  tileFace: OrdinaryTileFace;
+};
 export type ClaimReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
 export type ReactionAction = SubmitReactionAction | PassReactionAction | ClaimReactionAction;
 export type GameAction =
-  StartGameAction | DrawAction | DiscardAction | ReactionAction | ResolveReactionWindowAction;
+  | StartGameAction
+  | DrawAction
+  | DiscardAction
+  | ReactionAction
+  | ResolveReactionWindowAction
+  | DeclareAnGangAction;

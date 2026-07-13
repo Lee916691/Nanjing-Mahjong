@@ -237,3 +237,11 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - `applyGameActionToMatch` 是未来服务端推进权威 MatchState 的统一入口。房间和 WebSocket 业务不得直接调用纯 Game reducer 更新权威状态。
 - 当前敞开头 RuleSet 生成实际 20 分转账。未来进园子可按事件发生时的规则状态生成 10 或 20 分快照；未来胡牌也可新增携带 `transfers` 的 scoring event，通用 settlement 无需改变。
 - 当前 MVP 不保留 `eventId`、settled ledger 或完整回放日志。
+
+## 10. 暗杠纵向边界
+
+- 暗杠是玩家在自己的出牌阶段主动提交的 `DECLARE_AN_GANG` 动作；Game reducer 校验所选牌面后，从暗手中确定性选取四张实体牌并创建 `an-gang` Meld。
+- 暗杠成立后复用统一的牌墙尾部补牌与连续补花流程；开杠前空墙时动作 no-op，补花链耗尽时保留已经成立的暗杠和较早实时事件并结束本局。
+- RuleSet 在暗杠成立时通过 `getAnGangScoreTransfers` 生成 `ScoreTransfer` 快照；Game reducer 只创建 `an-gang-created` pending event，不直接修改累计分数。
+- `applyGameActionToMatch` 通过通用 settlement 在同一动作内结算暗杠及尾补产生的花杠事件。Settlement 只校验并执行事件中的 transfers，不写死暗杠金额，也不访问 RuleSet、Meld 或手牌重算。
+- 未来进园子可通过扩展暗杠事件发生时的 RuleSet context 和 transfer 输出改变付款规则，无需修改通用 settlement。

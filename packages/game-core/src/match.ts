@@ -212,7 +212,12 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
       throw settlementError(`event ${eventIndex} status is invalid`);
     const eventDeltas = Array<number>(players.length).fill(0);
 
-    if (candidate.type === 'ming-gang-created') {
+    if (candidate.type === 'an-gang-created') {
+      validPlayerIndex(candidate.playerIndex, players.length, eventIndex);
+      if (typeof candidate.meldId !== 'string' || candidate.meldId.trim().length === 0) {
+        throw settlementError(`event ${eventIndex} meldId is invalid`);
+      }
+    } else if (candidate.type === 'ming-gang-created') {
       const receiver = validPlayerIndex(candidate.receiverPlayerIndex, players.length, eventIndex);
       const payer = validPlayerIndex(candidate.payerPlayerIndex, players.length, eventIndex);
       if (receiver === payer) throw settlementError(`event ${eventIndex} payer equals receiver`);

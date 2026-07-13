@@ -86,6 +86,16 @@ export interface SeasonFlowerTile extends TileBase {
 
 export type FlowerTile = FourCopyFlowerTile | PlantFlowerTile | SeasonFlowerTile;
 export type OrdinaryHandTile = NumberTile | WindTile;
+export type OrdinaryTileFace =
+  | {
+      readonly category: 'number';
+      readonly suit: NumberTileSuit;
+      readonly rank: NumberTileRank;
+    }
+  | {
+      readonly category: 'wind';
+      readonly wind: WindTileKind;
+    };
 export type MahjongTile = OrdinaryHandTile | FlowerTile;
 export type Tile = MahjongTile;
 
@@ -175,7 +185,16 @@ export interface PendingMingGangScoringEvent {
   readonly status: 'pending';
 }
 
-export type PendingScoringEvent = PendingFlowerKongScoringEvent | PendingMingGangScoringEvent;
+export interface PendingAnGangScoringEvent {
+  readonly type: 'an-gang-created';
+  readonly playerIndex: number;
+  readonly meldId: string;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+
+export type PendingScoringEvent =
+  PendingFlowerKongScoringEvent | PendingMingGangScoringEvent | PendingAnGangScoringEvent;
 
 export interface GameState {
   readonly nextMeldSequence: number;
