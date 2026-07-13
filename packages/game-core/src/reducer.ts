@@ -123,6 +123,7 @@ export function drawReducer(state: GameState): GameState {
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, state.currentPlayerIndex, 'discard'),
     pendingScoringEvents: appendRuntimeFlowerKongEvents(
+      state.ruleSetId,
       state.pendingScoringEvents ?? [],
       currentPlayer,
       state.currentPlayerIndex,
@@ -452,12 +453,18 @@ function resolveMingGang(
       type: 'ming-gang-created',
       receiverPlayerIndex: playerIndex,
       payerPlayerIndex: window.fromPlayerIndex,
-      amount: 20,
       meldId,
+      transfers: getRuleSet(state.ruleSetId).getMingGangScoreTransfers({
+        receiverPlayerIndex: playerIndex,
+        payerPlayerIndex: window.fromPlayerIndex,
+        playerCount: state.players.length,
+        meldId,
+      }),
       status: 'pending',
     },
   ];
   const pendingScoringEvents = appendRuntimeFlowerKongEvents(
+    state.ruleSetId,
     scoringEvents,
     player,
     playerIndex,
@@ -667,6 +674,7 @@ function dealInitialHands(state: GameState): GameState {
     }
 
     pendingScoringEvents = appendFlowerKongEvents(
+      state.ruleSetId,
       pendingScoringEvents,
       player,
       playerIndex,
@@ -698,6 +706,7 @@ function dealInitialHands(state: GameState): GameState {
     };
     wall = replacement.wall;
     pendingScoringEvents = appendFlowerKongEvents(
+      state.ruleSetId,
       pendingScoringEvents,
       players[playerIndex],
       playerIndex,
@@ -756,6 +765,7 @@ function playerOrderFromDealer(dealerIndex: number): number[] {
 }
 
 function appendFlowerKongEvents(
+  ruleSetId: GameState['ruleSetId'],
   events: readonly PendingScoringEvent[],
   player: PlayerState,
   playerIndex: number,
@@ -779,6 +789,12 @@ function appendFlowerKongEvents(
         seat: player.seat,
         kind,
         createdDuring,
+        transfers: getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
+          playerIndex,
+          playerCount: SEATS.length,
+          kind,
+          createdDuring,
+        }),
         status: 'pending',
       });
     }
@@ -788,6 +804,7 @@ function appendFlowerKongEvents(
 }
 
 function appendRuntimeFlowerKongEvents(
+  ruleSetId: GameState['ruleSetId'],
   events: readonly PendingScoringEvent[],
   player: PlayerState,
   playerIndex: number,
@@ -804,6 +821,7 @@ function appendRuntimeFlowerKongEvents(
 
     if (index < eventFlowerCount) {
       nextEvents = appendFlowerKongEvents(
+        ruleSetId,
         nextEvents,
         player,
         playerIndex,

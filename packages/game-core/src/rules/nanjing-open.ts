@@ -16,6 +16,17 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
   validateAction: () => true,
   applyAction: (state) => state,
   getAvailableReactions: getNanjingOpenAvailableReactions,
+  getMingGangScoreTransfers: ({ receiverPlayerIndex, payerPlayerIndex }) => [
+    { fromPlayerIndex: payerPlayerIndex, toPlayerIndex: receiverPlayerIndex, amount: 20 },
+  ],
+  getFlowerKongScoreTransfers: ({ playerIndex, playerCount }) =>
+    Array.from({ length: playerCount }, (_, payerPlayerIndex) => payerPlayerIndex)
+      .filter((payerPlayerIndex) => payerPlayerIndex !== playerIndex)
+      .map((payerPlayerIndex) => ({
+        fromPlayerIndex: payerPlayerIndex,
+        toPlayerIndex: playerIndex,
+        amount: 20,
+      })),
 };
 
 function getNanjingOpenAvailableReactions(

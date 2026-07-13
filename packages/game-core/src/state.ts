@@ -150,12 +150,19 @@ export type FlowerKongKind =
 export type ScoringEventCreationStage =
   'initial-deal' | 'initial-flower-replacement' | 'runtime-flower-replacement';
 
+export interface ScoreTransfer {
+  readonly fromPlayerIndex: number;
+  readonly toPlayerIndex: number;
+  readonly amount: number;
+}
+
 export interface PendingFlowerKongScoringEvent {
   readonly type: 'flower-kong-created';
   readonly playerIndex: number;
   readonly seat: PlayerState['seat'];
   readonly kind: FlowerKongKind;
   readonly createdDuring: ScoringEventCreationStage;
+  readonly transfers: readonly ScoreTransfer[];
   readonly status: 'pending';
 }
 
@@ -163,8 +170,8 @@ export interface PendingMingGangScoringEvent {
   readonly type: 'ming-gang-created';
   readonly receiverPlayerIndex: number;
   readonly payerPlayerIndex: number;
-  readonly amount: 20;
   readonly meldId: string;
+  readonly transfers: readonly ScoreTransfer[];
   readonly status: 'pending';
 }
 

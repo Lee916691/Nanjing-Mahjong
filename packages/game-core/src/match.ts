@@ -1,9 +1,23 @@
-import { createGame, startGame } from './engine';
+import { applyAction, createGame, startGame } from './engine';
+import type { GameAction } from './actions';
 import { copyPlayers, SEATS } from './player';
 import type { Seat } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
 import type { RuleSetId } from './rules';
 import type { GameState } from './state';
+
+const FLOWER_KONG_KINDS = new Set([
+  'red-center',
+  'fortune',
+  'white-board',
+  'plum-orchid-bamboo-chrysanthemum',
+  'spring-summer-autumn-winter',
+]);
+const SCORING_EVENT_CREATION_STAGES = new Set([
+  'initial-deal',
+  'initial-flower-replacement',
+  'runtime-flower-replacement',
+]);
 
 export type MatchStatus = 'waiting' | 'playing' | 'completed';
 export type HandStatus = 'not-started' | 'playing' | 'completed';
@@ -144,7 +158,7 @@ export function startCurrentHand(match: MatchState): MatchState {
   });
   const ruleSet = getRuleSet(currentHand.ruleSetId);
 
-  return {
+  return settlePendingScoringEvents({
     ...match,
     ruleSetId: currentHand.ruleSetId,
     status: 'playing',
@@ -153,6 +167,125 @@ export function startCurrentHand(match: MatchState): MatchState {
     currentHandStatus: currentHand.phase === 'ended' ? 'completed' : 'playing',
     currentHand,
     isFinalDealerTurn: match.effectiveDealerTurn === ruleSet.totalEffectiveDealerTurns,
+  });
+}
+
+export function applyGameActionToMatch(match: MatchState, action: GameAction): MatchState {
+  const currentHand = applyAction(match.currentHand, action);
+  if (
+    currentHand === match.currentHand &&
+    Array.isArray(match.currentHand.pendingScoringEvents) &&
+    match.currentHand.pendingScoringEvents.length === 0
+  ) {
+    return match;
+  }
+  return settlePendingScoringEvents(
+    currentHand === match.currentHand ? match : { ...match, currentHand },
+  );
+}
+
+export function settlePendingScoringEvents(match: MatchState): MatchState {
+  const events: unknown = match.currentHand?.pendingScoringEvents;
+  if (!Array.isArray(events)) {
+    throw settlementError('pendingScoringEvents must be an array');
+  }
+  if (events.length === 0) return match;
+
+  const players: unknown = match.currentHand?.players;
+  const scores: unknown = match.cumulativeScores;
+  if (!Array.isArray(players) || players.length !== 4) {
+    throw settlementError('players must contain exactly four entries');
+  }
+  if (
+    !Array.isArray(scores) ||
+    scores.length !== 4 ||
+    scores.length !== players.length ||
+    !scores.every((score) => Number.isFinite(score) && Number.isInteger(score))
+  ) {
+    throw settlementError('cumulativeScores must contain four finite integers');
+  }
+
+  const deltas = Array<number>(players.length).fill(0);
+  events.forEach((candidate: unknown, eventIndex) => {
+    if (!isRecord(candidate)) throw settlementError(`event ${eventIndex} must be an object`);
+    if (candidate.status !== 'pending')
+      throw settlementError(`event ${eventIndex} status is invalid`);
+    const eventDeltas = Array<number>(players.length).fill(0);
+
+    if (candidate.type === 'ming-gang-created') {
+      const receiver = validPlayerIndex(candidate.receiverPlayerIndex, players.length, eventIndex);
+      const payer = validPlayerIndex(candidate.payerPlayerIndex, players.length, eventIndex);
+      if (receiver === payer) throw settlementError(`event ${eventIndex} payer equals receiver`);
+      if (typeof candidate.meldId !== 'string' || candidate.meldId.length === 0) {
+        throw settlementError(`event ${eventIndex} meldId is invalid`);
+      }
+    } else if (candidate.type === 'flower-kong-created') {
+      const receiver = validPlayerIndex(candidate.playerIndex, players.length, eventIndex);
+      const player = players[receiver];
+      if (!isRecord(player) || candidate.seat !== player.seat) {
+        throw settlementError(`event ${eventIndex} seat is invalid`);
+      }
+      if (typeof candidate.kind !== 'string' || !FLOWER_KONG_KINDS.has(candidate.kind)) {
+        throw settlementError(`event ${eventIndex} flower kind is invalid`);
+      }
+      if (
+        typeof candidate.createdDuring !== 'string' ||
+        !SCORING_EVENT_CREATION_STAGES.has(candidate.createdDuring)
+      ) {
+        throw settlementError(`event ${eventIndex} createdDuring is invalid`);
+      }
+    } else {
+      throw settlementError(`event ${eventIndex} type is invalid`);
+    }
+
+    if (!Array.isArray(candidate.transfers) || candidate.transfers.length === 0) {
+      throw settlementError(`event ${eventIndex} transfers must be a non-empty array`);
+    }
+    candidate.transfers.forEach((transfer: unknown, transferIndex) => {
+      if (!isRecord(transfer)) {
+        throw settlementError(`event ${eventIndex} transfer ${transferIndex} must be an object`);
+      }
+      const from = validPlayerIndex(
+        transfer.fromPlayerIndex,
+        players.length,
+        eventIndex,
+        transferIndex,
+      );
+      const to = validPlayerIndex(
+        transfer.toPlayerIndex,
+        players.length,
+        eventIndex,
+        transferIndex,
+      );
+      if (from === to) {
+        throw settlementError(`event ${eventIndex} transfer ${transferIndex} pays itself`);
+      }
+      if (
+        typeof transfer.amount !== 'number' ||
+        !Number.isFinite(transfer.amount) ||
+        !Number.isInteger(transfer.amount) ||
+        transfer.amount <= 0
+      ) {
+        throw settlementError(`event ${eventIndex} transfer ${transferIndex} amount is invalid`);
+      }
+      eventDeltas[from] = (eventDeltas[from] ?? 0) - transfer.amount;
+      eventDeltas[to] = (eventDeltas[to] ?? 0) + transfer.amount;
+    });
+
+    if (sum(eventDeltas) !== 0) throw settlementError(`event ${eventIndex} delta is not conserved`);
+    eventDeltas.forEach((delta, playerIndex) => {
+      deltas[playerIndex] = (deltas[playerIndex] ?? 0) + delta;
+    });
+  });
+
+  if (sum(deltas) !== 0) throw settlementError('batch delta is not conserved');
+  const cumulativeScores = scores.map((score, playerIndex) => score + (deltas[playerIndex] ?? 0));
+  if (!cumulativeScores.every((score) => Number.isFinite(score) && Number.isInteger(score)))
+    throw settlementError('settled score is not finite');
+  return {
+    ...match,
+    cumulativeScores,
+    currentHand: { ...match.currentHand, pendingScoringEvents: [] },
   };
 }
 
@@ -164,6 +297,8 @@ export function completeCurrentHand(match: MatchState, completion: HandCompletio
   if (match.currentHandStatus !== 'playing') {
     throw new Error('Current hand must be playing before it can complete');
   }
+
+  const settledMatch = settlePendingScoringEvents(match);
 
   const shouldAdvanceDealer = completion.dealerTransition === 'advance';
   const nextDealerIndex = shouldAdvanceDealer
@@ -183,18 +318,18 @@ export function completeCurrentHand(match: MatchState, completion: HandCompletio
     reason: completion.reason,
     ...(completion.completedBy === undefined ? {} : { completedBy: completion.completedBy }),
     ...(completion.notes === undefined ? {} : { notes: completion.notes }),
-    pendingScoringEventCount: match.currentHand.pendingScoringEvents.length,
+    pendingScoringEventCount: settledMatch.currentHand.pendingScoringEvents.length,
   };
 
   return {
-    ...match,
+    ...settledMatch,
     status: matchCompleted ? 'completed' : 'playing',
     effectiveDealerTurn: nextEffectiveDealerTurn,
     dealerIndex: nextDealerIndex,
     currentHandStatus: 'completed',
     currentHand: syncHandDealer(
       {
-        ...match.currentHand,
+        ...settledMatch.currentHand,
         phase: 'ended',
         turnStage: 'hand-ended',
         pendingAction: {
@@ -219,6 +354,10 @@ export function prepareNextHand(match: MatchState): MatchState {
     throw new Error('Current hand must be completed before preparing the next hand');
   }
 
+  if (match.currentHand.pendingScoringEvents.length !== 0) {
+    throw new Error('Match invariant failed: completed hand has pending scoring events');
+  }
+
   const currentHand = createInitialHandForMatch(match);
 
   return {
@@ -229,6 +368,31 @@ export function prepareNextHand(match: MatchState): MatchState {
     currentHand,
     isFinalDealerTurn: match.effectiveDealerTurn === match.totalEffectiveDealerTurns,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function validPlayerIndex(
+  value: unknown,
+  playerCount: number,
+  eventIndex: number,
+  transferIndex?: number,
+): number {
+  if (!Number.isInteger(value) || typeof value !== 'number' || value < 0 || value >= playerCount) {
+    const location = transferIndex === undefined ? '' : ` transfer ${transferIndex}`;
+    throw settlementError(`event ${eventIndex}${location} player index is invalid`);
+  }
+  return value;
+}
+
+function sum(values: readonly number[]): number {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function settlementError(detail: string): Error {
+  return new Error(`Scoring settlement invariant failed: ${detail}`);
 }
 
 function syncHandDealer(hand: GameState, dealerIndex: number): GameState {

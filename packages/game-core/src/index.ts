@@ -44,6 +44,7 @@ export type {
   ReactionWindow,
   ReactionWindowStatus,
   ScoringEventCreationStage,
+  ScoreTransfer,
   SeasonFlowerTile,
   SeasonFlowerTileId,
   SeasonFlowerKind,
@@ -66,7 +67,7 @@ export {
   getRuleSet,
   listRuleSets,
 } from './rules';
-export type { RuleSet, RuleSetId } from './rules';
+export type { FlowerKongScoringContext, MingGangScoringContext, RuleSet, RuleSetId } from './rules';
 
 export { SEATS, createInitialPlayers } from './player';
 export type { DiscardRecord, PlayerState, Seat } from './player';
@@ -112,10 +113,12 @@ export {
 export type { GameEngine } from './engine';
 
 export {
+  applyGameActionToMatch,
   completeCurrentHand,
   createInitialHandForMatch,
   createMatch,
   prepareNextHand,
+  settlePendingScoringEvents,
   startCurrentHand,
   startMatch,
 } from './match';

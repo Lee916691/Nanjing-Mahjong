@@ -6,6 +6,7 @@ import {
   SEATS,
   advanceTurn,
   applyAction,
+  applyGameActionToMatch,
   WIND_TILE_KINDS,
   NANJING_OPEN_RULE_SET,
   createInitialPlayers,
@@ -30,6 +31,7 @@ import {
   replaceFlowersForSinglePlayer,
   resolveDrawnTileWithFlowerReplacement,
   requiresFlowerReveal,
+  settlePendingScoringEvents,
   startCurrentHand,
   startGame,
   startMatch,
@@ -46,6 +48,7 @@ import type {
   MeldType,
   OrdinaryHandTile,
   PlayerState,
+  PendingScoringEvent,
   ReactionAvailability,
   ReactionWindow,
   ReactionWindowStatus,
@@ -54,6 +57,16 @@ import type {
   StartGameOptions,
   TileId,
 } from '../src';
+
+const transfer = (fromPlayerIndex: number, toPlayerIndex: number, amount = 20) => ({
+  fromPlayerIndex,
+  toPlayerIndex,
+  amount,
+});
+const flowerTransfers = (playerIndex: number, amount = 20) =>
+  SEATS.map((_, payerIndex) => payerIndex)
+    .filter((payerIndex) => payerIndex !== playerIndex)
+    .map((payerIndex) => transfer(payerIndex, playerIndex, amount));
 
 describe('Meld player state model', () => {
   it('exports the reaction resolution status and action types', () => {
@@ -135,6 +148,7 @@ describe('MingGang reaction execution', () => {
       seat: 'east' as const,
       kind: 'red-center' as const,
       createdDuring: 'initial-deal' as const,
+      transfers: flowerTransfers(0),
       status: 'pending' as const,
     };
     const awaiting = createAwaitingMingGangResolutionState({
@@ -180,8 +194,8 @@ describe('MingGang reaction execution', () => {
         type: 'ming-gang-created',
         receiverPlayerIndex: 1,
         payerPlayerIndex: 0,
-        amount: 20,
         meldId: 'meld-7',
+        transfers: [transfer(0, 1)],
         status: 'pending',
       },
     ]);
@@ -197,6 +211,7 @@ describe('MingGang reaction execution', () => {
       seat: 'east' as const,
       kind: 'fortune' as const,
       createdDuring: 'initial-deal' as const,
+      transfers: flowerTransfers(0),
       status: 'pending' as const,
     };
     const awaiting = createAwaitingMingGangResolutionState({
@@ -233,6 +248,7 @@ describe('MingGang reaction execution', () => {
       seat: 'south',
       kind: 'red-center',
       createdDuring: 'runtime-flower-replacement',
+      transfers: flowerTransfers(1),
       status: 'pending',
     });
   });
@@ -261,8 +277,8 @@ describe('MingGang reaction execution', () => {
         type: 'ming-gang-created',
         receiverPlayerIndex: 1,
         payerPlayerIndex: 0,
-        amount: 20,
         meldId: 'meld-1',
+        transfers: [transfer(0, 1)],
         status: 'pending',
       },
     ]);
@@ -406,6 +422,7 @@ describe('MingGang reaction execution', () => {
         seat: 'east',
         kind: 'red-center',
         createdDuring: 'runtime-flower-replacement',
+        transfers: flowerTransfers(0),
         status: 'pending',
       },
     ]);
@@ -490,14 +507,15 @@ describe('MingGang reaction execution', () => {
         seat: 'south',
         kind: 'fortune',
         createdDuring: 'initial-deal',
+        transfers: flowerTransfers(1),
         status: 'pending',
       },
       {
         type: 'ming-gang-created',
         receiverPlayerIndex: 2,
         payerPlayerIndex: 0,
-        amount: 20,
         meldId: 'meld-old',
+        transfers: [transfer(0, 2)],
         status: 'pending',
       },
     ];
@@ -535,6 +553,7 @@ describe('MingGang reaction execution', () => {
         seat: 'east' as const,
         kind: 'red-center' as const,
         createdDuring,
+        transfers: flowerTransfers(0),
         status: 'pending' as const,
       };
       const state: GameState = {
@@ -564,8 +583,8 @@ describe('MingGang reaction execution', () => {
       type: 'ming-gang-created' as const,
       receiverPlayerIndex: 2,
       payerPlayerIndex: 3,
-      amount: 20 as const,
       meldId: 'meld-old',
+      transfers: [transfer(3, 2)],
       status: 'pending' as const,
     };
     const state: GameState = {
@@ -617,6 +636,7 @@ describe('MingGang reaction execution', () => {
       seat: 'west' as const,
       kind: 'fortune' as const,
       createdDuring: 'initial-deal' as const,
+      transfers: flowerTransfers(2),
       status: 'pending' as const,
     };
     const state: GameState = {
@@ -653,8 +673,8 @@ describe('MingGang reaction execution', () => {
       type: 'ming-gang-created' as const,
       receiverPlayerIndex: 2,
       payerPlayerIndex: 1,
-      amount: 20 as const,
       meldId: 'meld-old',
+      transfers: [transfer(1, 2)],
       status: 'pending' as const,
     };
     const state: GameState = {
@@ -703,8 +723,8 @@ describe('MingGang reaction execution', () => {
         type: 'ming-gang-created',
         receiverPlayerIndex: 1,
         payerPlayerIndex: 0,
-        amount: 20,
         meldId: 'meld-old',
+        transfers: [transfer(0, 1)],
         status: 'pending',
       },
     ];
@@ -925,6 +945,486 @@ describe('Nanjing Mahjong RuleSet registry', () => {
     expect(typeof ruleSet.getAvailableReactions).toBe('function');
     expect(listRuleSets()).toEqual([NANJING_OPEN_RULE_SET]);
   });
+
+  it('creates deterministic current-rule MingGang and flower-kong transfer snapshots', () => {
+    const ruleSet = getRuleSet('nanjing-open');
+    expect(
+      ruleSet.getMingGangScoreTransfers({
+        receiverPlayerIndex: 1,
+        payerPlayerIndex: 3,
+        playerCount: 4,
+        meldId: 'meld-1',
+      }),
+    ).toEqual([transfer(3, 1)]);
+    const context = {
+      playerIndex: 2,
+      playerCount: 4,
+      kind: 'red-center' as const,
+      createdDuring: 'initial-deal' as const,
+    };
+    expect(ruleSet.getFlowerKongScoreTransfers(context)).toEqual([
+      transfer(0, 2),
+      transfer(1, 2),
+      transfer(3, 2),
+    ]);
+    expect(ruleSet.getFlowerKongScoreTransfers(context)).toEqual(
+      ruleSet.getFlowerKongScoreTransfers(context),
+    );
+  });
+});
+
+describe('Pending scoring event settlement', () => {
+  const withEvents = (
+    events: readonly PendingScoringEvent[],
+    scores: readonly number[] = [1000, 1000, 1000, 1000],
+  ): MatchState => ({
+    ...createMatch(),
+    cumulativeScores: scores,
+    currentHand: { ...createMatch().currentHand, pendingScoringEvents: events },
+  });
+  const mingEvent = (transfers: readonly ReturnType<typeof transfer>[]): PendingScoringEvent => ({
+    type: 'ming-gang-created',
+    receiverPlayerIndex: 1,
+    payerPlayerIndex: 0,
+    meldId: 'meld-1',
+    transfers,
+    status: 'pending',
+  });
+  const flowerEvent = (transfers: readonly ReturnType<typeof transfer>[]): PendingScoringEvent => ({
+    type: 'flower-kong-created',
+    playerIndex: 1,
+    seat: 'south',
+    kind: 'red-center',
+    createdDuring: 'runtime-flower-replacement',
+    transfers,
+    status: 'pending',
+  });
+
+  it('returns the original match for an empty queue', () => {
+    const match = createMatch();
+    expect(settlePendingScoringEvents(match)).toBe(match);
+  });
+
+  it('settles ming-gang once and allows negative scores', () => {
+    const match = withEvents(
+      [
+        {
+          type: 'ming-gang-created',
+          receiverPlayerIndex: 1,
+          payerPlayerIndex: 3,
+          meldId: 'meld-1',
+          transfers: [transfer(3, 1)],
+          status: 'pending',
+        },
+      ],
+      [1000, 1000, 1000, 10],
+    );
+    const settled = settlePendingScoringEvents(match);
+
+    expect(settled.cumulativeScores).toEqual([1000, 1020, 1000, -10]);
+    expect(settled.currentHand.pendingScoringEvents).toEqual([]);
+    expect(settlePendingScoringEvents(settled)).toBe(settled);
+    expect(match.cumulativeScores).toEqual([1000, 1000, 1000, 10]);
+  });
+
+  it('executes 10-point and mixed transfer snapshots without applying a Mahjong formula', () => {
+    expect(
+      settlePendingScoringEvents(withEvents([mingEvent([transfer(0, 1, 10)])])).cumulativeScores,
+    ).toEqual([990, 1010, 1000, 1000]);
+    expect(
+      settlePendingScoringEvents(withEvents([flowerEvent(flowerTransfers(1, 10))]))
+        .cumulativeScores,
+    ).toEqual([990, 1030, 990, 990]);
+    expect(
+      settlePendingScoringEvents(
+        withEvents([flowerEvent([transfer(0, 1, 10), transfer(2, 1, 15), transfer(3, 1, 20)])]),
+      ).cumulativeScores,
+    ).toEqual([990, 1045, 985, 980]);
+  });
+
+  it('settles mixed 10 and 20 point event snapshots in queue order', () => {
+    const settled = settlePendingScoringEvents(
+      withEvents([
+        mingEvent([transfer(0, 1, 10)]),
+        flowerEvent([transfer(0, 1), transfer(2, 1), transfer(3, 1)]),
+      ]),
+    );
+    expect(settled.cumulativeScores).toEqual([970, 1070, 980, 980]);
+  });
+
+  it.each([
+    'red-center',
+    'fortune',
+    'white-board',
+    'plum-orchid-bamboo-chrysanthemum',
+    'spring-summer-autumn-winter',
+  ] as const)('settles flower-kong kind %s', (kind) => {
+    const settled = settlePendingScoringEvents(
+      withEvents([
+        {
+          type: 'flower-kong-created',
+          playerIndex: 2,
+          seat: 'west',
+          kind,
+          createdDuring: 'runtime-flower-replacement',
+          transfers: flowerTransfers(2),
+          status: 'pending',
+        },
+      ]),
+    );
+    expect(settled.cumulativeScores).toEqual([980, 980, 1060, 980]);
+  });
+
+  it.each(['initial-deal', 'initial-flower-replacement', 'runtime-flower-replacement'] as const)(
+    'settles flower-kong creation stage %s',
+    (createdDuring) => {
+      const settled = settlePendingScoringEvents(
+        withEvents([
+          {
+            type: 'flower-kong-created',
+            playerIndex: 0,
+            seat: 'east',
+            kind: 'fortune',
+            createdDuring,
+            transfers: flowerTransfers(0),
+            status: 'pending',
+          },
+        ]),
+      );
+      expect(settled.cumulativeScores).toEqual([1060, 980, 980, 980]);
+    },
+  );
+
+  it('settles a mixed batch atomically while preserving ended state', () => {
+    const match = withEvents([
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 1,
+        payerPlayerIndex: 0,
+        meldId: 'meld-2',
+        transfers: [transfer(0, 1)],
+        status: 'pending',
+      },
+      {
+        type: 'flower-kong-created',
+        playerIndex: 1,
+        seat: 'south',
+        kind: 'white-board',
+        createdDuring: 'runtime-flower-replacement',
+        transfers: flowerTransfers(1),
+        status: 'pending',
+      },
+    ]);
+    const ended = {
+      ...match,
+      currentHand: {
+        ...match.currentHand,
+        phase: 'ended' as const,
+        turnStage: 'hand-ended' as const,
+      },
+    };
+    const settled = settlePendingScoringEvents(ended);
+    expect(settled.cumulativeScores).toEqual([960, 1080, 980, 980]);
+    expect(settled.currentHand.phase).toBe('ended');
+    expect(settled.currentHand.pendingScoringEvents).toEqual([]);
+  });
+
+  it.each([
+    [
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 4,
+        payerPlayerIndex: 0,
+        meldId: 'meld-1',
+        transfers: [transfer(0, 1)],
+        status: 'pending',
+      },
+    ],
+    [
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 0,
+        payerPlayerIndex: 0,
+        meldId: 'meld-1',
+        transfers: [transfer(0, 1)],
+        status: 'pending',
+      },
+    ],
+    [
+      {
+        type: 'flower-kong-created',
+        playerIndex: 0,
+        seat: 'south',
+        kind: 'fortune',
+        createdDuring: 'initial-deal',
+        transfers: flowerTransfers(0),
+        status: 'pending',
+      },
+    ],
+    [{ type: 'unknown', status: 'pending' }],
+  ])('rejects corrupt events transactionally', (rawEvents) => {
+    const events = rawEvents as unknown as readonly PendingScoringEvent[];
+    const match = withEvents(events);
+    expect(() => settlePendingScoringEvents(match)).toThrow(/scoring settlement invariant failed/i);
+    expect(match.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(match.currentHand.pendingScoringEvents).toBe(events);
+  });
+
+  it.each([null, 7, { ...mingEvent([transfer(0, 1)]), status: 'settled' }])(
+    'rejects malformed event metadata without mutation',
+    (rawEvent) => {
+      const events = [rawEvent] as unknown as readonly PendingScoringEvent[];
+      const match = withEvents(events);
+      expect(() => settlePendingScoringEvents(match)).toThrow(
+        /scoring settlement invariant failed/i,
+      );
+      expect(match.currentHand.pendingScoringEvents).toBe(events);
+      expect(match.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    },
+  );
+
+  it.each([
+    { players: createMatch().currentHand.players.slice(0, 3) },
+    { cumulativeScores: [1000, 1000, 1000] },
+    { cumulativeScores: [Number.NaN, 1000, 1000, 1000] },
+    { cumulativeScores: [Number.POSITIVE_INFINITY, 1000, 1000, 1000] },
+  ])('rejects corrupt Match scoring invariants', (corruption) => {
+    const base = withEvents([mingEvent([transfer(0, 1)])]);
+    const match =
+      'players' in corruption
+        ? { ...base, currentHand: { ...base.currentHand, players: corruption.players! } }
+        : { ...base, cumulativeScores: corruption.cumulativeScores };
+    expect(() => settlePendingScoringEvents(match)).toThrow(/scoring settlement invariant failed/i);
+    expect(base.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+  });
+
+  it.each([
+    ['not-array', 'bad'],
+    ['empty', []],
+    ['null', [null]],
+    ['primitive', [1]],
+    ['from-negative', [transfer(-1, 1)]],
+    ['from-out-of-range', [transfer(4, 1)]],
+    ['from-fraction', [transfer(0.5, 1)]],
+    ['to-negative', [transfer(0, -1)]],
+    ['to-out-of-range', [transfer(0, 4)]],
+    ['to-fraction', [transfer(0, 1.5)]],
+    ['self-transfer', [transfer(1, 1)]],
+    ['zero', [transfer(0, 1, 0)]],
+    ['negative', [transfer(0, 1, -1)]],
+    ['fraction', [transfer(0, 1, 1.5)]],
+    ['nan', [transfer(0, 1, Number.NaN)]],
+    ['infinity', [transfer(0, 1, Number.POSITIVE_INFINITY)]],
+    ['string-amount', [{ fromPlayerIndex: 0, toPlayerIndex: 1, amount: '20' }]],
+  ])('rejects corrupt transfer %s transactionally', (_name, rawTransfers) => {
+    const event = {
+      ...mingEvent([transfer(0, 1)]),
+      transfers: rawTransfers,
+    } as unknown as PendingScoringEvent;
+    const events = [event];
+    const match = withEvents(events);
+    expect(() => settlePendingScoringEvents(match)).toThrow(/scoring settlement invariant failed/i);
+    expect(match.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(match.currentHand.pendingScoringEvents).toBe(events);
+  });
+
+  it.each([
+    [mingEvent([transfer(0, 1)]), { type: 'unknown', status: 'pending' }],
+    [{ type: 'unknown', status: 'pending' }, mingEvent([transfer(0, 1)])],
+    [mingEvent([transfer(0, 1), transfer(0, 0)]), flowerEvent(flowerTransfers(1))],
+  ])(
+    'rejects an invalid event or transfer without partially settling the batch',
+    (...rawEvents) => {
+      const events = rawEvents as unknown as readonly PendingScoringEvent[];
+      const match = withEvents(events);
+      expect(() => settlePendingScoringEvents(match)).toThrow(
+        /scoring settlement invariant failed/i,
+      );
+      expect(match.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+      expect(match.currentHand.pendingScoringEvents).toBe(events);
+    },
+  );
+
+  it('settles pre-existing events even when a game action is a no-op', () => {
+    const match = withEvents([
+      {
+        type: 'ming-gang-created',
+        receiverPlayerIndex: 1,
+        payerPlayerIndex: 0,
+        meldId: 'meld-1',
+        transfers: [transfer(0, 1)],
+        status: 'pending',
+      },
+    ]);
+    const result = applyGameActionToMatch(match, { type: 'DRAW_TILE' });
+    expect(result.cumulativeScores).toEqual([980, 1020, 1000, 1000]);
+    expect(result.currentHand.pendingScoringEvents).toEqual([]);
+  });
+
+  it('leaves the original Match unchanged when action settlement or completion fails', () => {
+    const corrupt = {
+      ...mingEvent([transfer(0, 1)]),
+      transfers: [],
+    } as unknown as PendingScoringEvent;
+    const noOpMatch = withEvents([corrupt]);
+    expect(() => applyGameActionToMatch(noOpMatch, { type: 'DRAW_TILE' })).toThrow(
+      /scoring settlement invariant failed/i,
+    );
+    const playing = {
+      ...noOpMatch,
+      status: 'playing' as const,
+      currentHandStatus: 'playing' as const,
+    };
+    expect(() =>
+      completeCurrentHand(playing, { dealerTransition: 'stay', reason: 'draw' }),
+    ).toThrow(/scoring settlement invariant failed/i);
+    expect(noOpMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(noOpMatch.currentHand.pendingScoringEvents).toEqual([corrupt]);
+
+    const deck = createNanjingMahjongDeck();
+    const advancing = {
+      ...noOpMatch,
+      currentHand: {
+        ...createPlayingGameWithWall([ordinaryTileById(deck, 'wan-1-1')]),
+        pendingScoringEvents: [corrupt],
+      },
+    };
+    expect(() => applyGameActionToMatch(advancing, { type: 'DRAW_TILE' })).toThrow(
+      /scoring settlement invariant failed/i,
+    );
+    expect(advancing.currentHand.wall).toHaveLength(1);
+  });
+
+  it('preserves the match reference for a no-op with no events', () => {
+    const match = createMatch();
+    expect(applyGameActionToMatch(match, { type: 'DRAW_TILE' })).toBe(match);
+  });
+
+  it('applies an ordinary action without changing scores', () => {
+    const match = startMatch(createMatch());
+    const tileId = playerAt(match.currentHand, match.dealerIndex).hand[0]?.id;
+    if (!tileId) throw new Error('Expected dealer tile');
+    const result = applyGameActionToMatch(match, { type: 'DISCARD_TILE', tileId });
+    expect(result.currentHand).not.toBe(match.currentHand);
+    expect(result.cumulativeScores).toBe(match.cumulativeScores);
+    expect(result.currentHand.pendingScoringEvents).toEqual([]);
+  });
+
+  it('settles before completing and rejects discarding an unsettled completed hand', () => {
+    const playing = {
+      ...withEvents([
+        {
+          type: 'ming-gang-created',
+          receiverPlayerIndex: 1,
+          payerPlayerIndex: 0,
+          meldId: 'meld-1',
+          transfers: [transfer(0, 1)],
+          status: 'pending',
+        },
+      ]),
+      status: 'playing' as const,
+      currentHandStatus: 'playing' as const,
+    };
+    const completed = completeCurrentHand(playing, { dealerTransition: 'stay', reason: 'draw' });
+    expect(completed.cumulativeScores).toEqual([980, 1020, 1000, 1000]);
+    expect(completed.completedHands[0]?.pendingScoringEventCount).toBe(0);
+
+    const corruptCompleted = {
+      ...completed,
+      currentHand: {
+        ...completed.currentHand,
+        pendingScoringEvents: playing.currentHand.pendingScoringEvents,
+      },
+    };
+    expect(() => prepareNextHand(corruptCompleted)).toThrow(/pending scoring events/i);
+  });
+
+  it('settles a real runtime draw flower-kong in the same Match action', () => {
+    const deck = createNanjingMahjongDeck();
+    const hand = createPlayingGameWithWall([
+      flowerTileById(deck, 'flower-red-center-4'),
+      ordinaryTileById(deck, 'tiao-5-1'),
+    ]);
+    hand.players[0] = {
+      ...hand.players[0]!,
+      flowers: [1, 2, 3].map((copy) => flowerTileById(deck, `flower-red-center-${copy}` as TileId)),
+    };
+    const match = {
+      ...createMatch(),
+      status: 'playing' as const,
+      currentHandStatus: 'playing' as const,
+      currentHand: hand,
+    };
+    const result = applyGameActionToMatch(match, { type: 'DRAW_TILE' });
+    expect(result.cumulativeScores).toEqual([1060, 980, 980, 980]);
+    expect(tileIds(playerAt(result.currentHand, 0).flowers).slice(-1)).toEqual([
+      'flower-red-center-4',
+    ]);
+    expect(tileIds(playerAt(result.currentHand, 0).hand)).toEqual(['tiao-5-1']);
+    expect(result.currentHand.pendingScoringEvents).toEqual([]);
+  });
+
+  it('settles a real MingGang and its tail flower-kong in the same Match action', () => {
+    const deck = createNanjingMahjongDeck();
+    const hand = createAwaitingMingGangResolutionState({
+      wall: [ordinaryTileById(deck, 'tiao-5-1'), flowerTileById(deck, 'flower-red-center-4')],
+      flowers: [1, 2, 3].map((copy) => flowerTileById(deck, `flower-red-center-${copy}` as TileId)),
+    });
+    const match = {
+      ...createMatch(),
+      status: 'playing' as const,
+      currentHandStatus: 'playing' as const,
+      currentHand: hand,
+    };
+    const result = applyGameActionToMatch(match, { type: 'RESOLVE_REACTION_WINDOW' });
+    expect(result.cumulativeScores).toEqual([960, 1080, 980, 980]);
+    expect(playerAt(result.currentHand, 1).melds[0]?.type).toBe('ming-gang');
+    expect(playerAt(result.currentHand, 0).discardPile[0]?.claimedByMeldId).toBe('meld-1');
+    expect(tileIds(playerAt(result.currentHand, 1).hand)).toEqual(['tiao-5-1']);
+    expect(result.currentHand.reactionWindow?.status).toBe('closed');
+    expect(result.currentHand.pendingScoringEvents).toEqual([]);
+  });
+
+  it('settles a real MingGang transfer while preserving its reducer result', () => {
+    const deck = createNanjingMahjongDeck();
+    const hand = createAwaitingMingGangResolutionState({
+      wall: [ordinaryTileById(deck, 'tiao-5-1')],
+    });
+    const match = {
+      ...createMatch(),
+      status: 'playing' as const,
+      currentHandStatus: 'playing' as const,
+      currentHand: hand,
+    };
+    const result = applyGameActionToMatch(match, { type: 'RESOLVE_REACTION_WINDOW' });
+    expect(result.cumulativeScores).toEqual([980, 1020, 1000, 1000]);
+    expect(playerAt(result.currentHand, 1).melds[0]?.type).toBe('ming-gang');
+    expect(playerAt(result.currentHand, 0).discardPile[0]?.claimedByMeldId).toBe('meld-1');
+    expect(result.currentHand.lastDiscard).toBeUndefined();
+    expect(result.currentHand.reactionWindow?.status).toBe('closed');
+    expect(result.currentHand.currentPlayerIndex).toBe(1);
+    expect(result.currentHand.pendingScoringEvents).toEqual([]);
+  });
+
+  it('settles earlier snapshots and MingGang when its final tail flower ends the hand', () => {
+    const deck = createNanjingMahjongDeck();
+    const earlier = flowerEvent(flowerTransfers(1));
+    const hand = createAwaitingMingGangResolutionState({
+      wall: [flowerTileById(deck, 'flower-red-center-4')],
+      flowers: [1, 2, 3].map((copy) => flowerTileById(deck, `flower-red-center-${copy}` as TileId)),
+      pendingScoringEvents: [earlier],
+    });
+    const match = {
+      ...createMatch(),
+      status: 'playing' as const,
+      currentHandStatus: 'playing' as const,
+      currentHand: hand,
+    };
+    const result = applyGameActionToMatch(match, { type: 'RESOLVE_REACTION_WINDOW' });
+    expect(result.currentHand.phase).toBe('ended');
+    expect(result.cumulativeScores).toEqual([960, 1080, 980, 980]);
+    expect(result.currentHand.pendingScoringEvents).toEqual([]);
+  });
 });
 
 describe('Nanjing Mahjong match state', () => {
@@ -1050,17 +1550,8 @@ describe('Nanjing Mahjong match state', () => {
     };
     const startedMatch = startMatch(match);
 
-    expect(startedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
-    expect(startedMatch.currentHand.pendingScoringEvents).toEqual([
-      {
-        type: 'flower-kong-created',
-        playerIndex: 0,
-        seat: 'east',
-        kind: 'red-center',
-        createdDuring: 'initial-deal',
-        status: 'pending',
-      },
-    ]);
+    expect(startedMatch.cumulativeScores).toEqual([1060, 980, 980, 980]);
+    expect(startedMatch.currentHand.pendingScoringEvents).toEqual([]);
     expect('score' in playerAt(startedMatch.currentHand, 0)).toBe(false);
 
     const completedMatch = completeCurrentHand(startedMatch, {
@@ -1068,10 +1559,8 @@ describe('Nanjing Mahjong match state', () => {
       reason: 'draw',
     });
 
-    expect(completedMatch.currentHand.pendingScoringEvents).toEqual(
-      startedMatch.currentHand.pendingScoringEvents,
-    );
-    expect(completedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
+    expect(completedMatch.currentHand.pendingScoringEvents).toEqual([]);
+    expect(completedMatch.cumulativeScores).toEqual([1060, 980, 980, 980]);
   });
 
   it('completes a hand with dealer advance without settling scores', () => {
@@ -1617,6 +2106,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         seat: 'east',
         kind: 'red-center',
         createdDuring: 'initial-deal',
+        transfers: flowerTransfers(0),
         status: 'pending',
       },
     ]);
@@ -1690,6 +2180,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         seat: 'east' as const,
         kind: 'red-center' as const,
         createdDuring: 'initial-deal' as const,
+        transfers: flowerTransfers(0),
         status: 'pending' as const,
       },
     ];
@@ -2138,6 +2629,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
           seat: 'east',
           kind: 'red-center',
           createdDuring: 'initial-deal',
+          transfers: flowerTransfers(0),
           status: 'pending',
         },
       ];
@@ -2330,6 +2822,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         seat: 'east',
         kind: 'red-center',
         createdDuring: 'initial-deal',
+        transfers: flowerTransfers(0),
         status: 'pending',
       },
     ];
@@ -2382,6 +2875,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         seat: 'east',
         kind: 'red-center',
         createdDuring: 'initial-deal',
+        transfers: flowerTransfers(0),
         status: 'pending',
       },
     ];

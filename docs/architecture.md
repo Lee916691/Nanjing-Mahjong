@@ -228,3 +228,12 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 ## 8. 当前实现提示
 
 当前仓库中 `apps/server` 仍只有健康检查和最小 `server:hello` 事件；`packages/game-core` 已有部分牌、牌墙、补花和基础回合推进能力。后续实现应按照 `docs/mvp-roadmap.md` 分阶段推进，不应在本架构文档归位步骤中写功能代码。
+
+## 9. Match 实时计分边界
+
+- Game reducer 只推进纯 `GameState` 并产生 `pendingScoringEvents`，不直接修改 `cumulativeScores`。RuleSet 在事件发生时根据当时的规则上下文确定实际 `ScoreTransfer`，事件保存不可变的转账快照。
+- Match 层通过 `settlePendingScoringEvents` 消费事件；settlement 只校验并执行 `transfers`，不理解明杠、花杠或其他麻将金额规则。整批验证成功后更新累计分并清空队列。
+- `startCurrentHand` 结算初始事件；`applyGameActionToMatch` 在同一次 Match action 中结算运行时事件；即使 GameState 已 ended，已有事件仍须结算。
+- `applyGameActionToMatch` 是未来服务端推进权威 MatchState 的统一入口。房间和 WebSocket 业务不得直接调用纯 Game reducer 更新权威状态。
+- 当前敞开头 RuleSet 生成实际 20 分转账。未来进园子可按事件发生时的规则状态生成 10 或 20 分快照；未来胡牌也可新增携带 `transfers` 的 scoring event，通用 settlement 无需改变。
+- 当前 MVP 不保留 `eventId`、settled ledger 或完整回放日志。
