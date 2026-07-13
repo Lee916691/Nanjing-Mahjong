@@ -204,6 +204,7 @@ describe('AnGang availability and rule snapshots', () => {
   it('returns no option outside a legal active turn or with corrupt duplicate entities', () => {
     const valid = createAnGangState();
     const openWindow = {
+      source: 'discard' as const,
       discardedTile: ordinary('tong-1-1'),
       fromPlayerIndex: 1,
       fromSeat: 'south' as const,
@@ -309,6 +310,7 @@ describe('AnGang execution', () => {
         status: 'pending',
       },
     ]);
+    expect(result.handProgressFacts.successfulAnGangCount).toBe(1);
     expect(player(result).discardPile).toBe(player(state).discardPile);
     expect(result.lastDiscard).toBe(state.lastDiscard);
   });

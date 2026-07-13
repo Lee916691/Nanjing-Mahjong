@@ -6,6 +6,11 @@ export interface DiscardRecord {
   readonly claimedByMeldId?: string;
 }
 
+export interface BuGangDrawProvenance {
+  readonly targetMeldId: string;
+  readonly tileId: OrdinaryHandTile['id'];
+}
+
 export const SEATS = ['east', 'south', 'west', 'north'] as const;
 export type Seat = (typeof SEATS)[number];
 
@@ -17,6 +22,8 @@ export interface PlayerState {
   readonly melds: readonly Meld[];
   readonly discardPile: readonly DiscardRecord[];
   readonly isDealer: boolean;
+  readonly passHu: boolean;
+  readonly buGangDrawProvenance: readonly BuGangDrawProvenance[];
 }
 
 export function createInitialPlayers(dealerIndex = 0): PlayerState[] {
@@ -28,6 +35,8 @@ export function createInitialPlayers(dealerIndex = 0): PlayerState[] {
     melds: [],
     discardPile: [],
     isDealer: index === dealerIndex,
+    passHu: false,
+    buGangDrawProvenance: [],
   }));
 }
 
@@ -38,5 +47,6 @@ export function copyPlayers(players: readonly PlayerState[]): PlayerState[] {
     flowers: [...player.flowers],
     melds: [...player.melds],
     discardPile: [...player.discardPile],
+    buGangDrawProvenance: [...player.buGangDrawProvenance],
   }));
 }

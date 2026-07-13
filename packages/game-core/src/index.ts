@@ -23,6 +23,14 @@ export type {
   FourCopyIndex,
   GamePhase,
   GameState,
+  HandProgressFacts,
+  HandResult,
+  DrawHandResult,
+  WinHandResult,
+  WinHandWinner,
+  HuEvaluation,
+  HuPattern,
+  HuSource,
   MahjongTile,
   NumberTile,
   NumberTileId,
@@ -35,8 +43,11 @@ export type {
   PendingAction,
   PendingActionType,
   PendingAnGangScoringEvent,
+  PendingBuGangIntent,
+  PendingBuGangScoringEvent,
   PendingFlowerKongScoringEvent,
   PendingMingGangScoringEvent,
+  PendingHuScoringEvent,
   PendingScoringEvent,
   LastDiscard,
   PlantFlowerKind,
@@ -44,6 +55,9 @@ export type {
   ReactionResponder,
   ReactionResponse,
   ReactionWindow,
+  ReactionWindowBase,
+  DiscardReactionWindow,
+  BuGangReactionWindow,
   ReactionWindowStatus,
   ScoringEventCreationStage,
   ScoreTransfer,
@@ -71,19 +85,23 @@ export {
 } from './rules';
 export type {
   AnGangScoringContext,
+  BuGangScoringContext,
   FlowerKongScoringContext,
+  HuEvaluationContext,
+  HuScoringContext,
   MingGangScoringContext,
   RuleSet,
   RuleSetId,
 } from './rules';
 
 export { SEATS, createInitialPlayers } from './player';
-export type { DiscardRecord, PlayerState, Seat } from './player';
+export type { BuGangDrawProvenance, DiscardRecord, PlayerState, Seat } from './player';
 export type { Meld, MeldType } from './meld';
 
 export type {
   ClaimReactionAction,
   DeclareAnGangAction,
+  DeclareBuGangAction,
   DiscardAction,
   DrawAction,
   GameAction,
@@ -103,6 +121,7 @@ export {
   drawTileFromWallHead,
   drawTileFromWallTail,
   getAvailableAnGangs,
+  getAvailableBuGangs,
   isFlowerTile,
   isNumberTile,
   isOrdinaryHandTile,
@@ -111,6 +130,19 @@ export {
   requiresFlowerReveal,
   resolveDrawnTileWithFlowerReplacement,
 } from './reducer';
+export type { AvailableBuGang } from './reducer';
+
+export { evaluateHuStructure, ordinaryTileFace, ordinaryTileFaceKey } from './hu';
+export type {
+  DragonSevenPairsHuStructure,
+  HuConcealedMeld,
+  HuSequence,
+  HuStructure,
+  HuStructureInput,
+  HuTriplet,
+  SevenPairsHuStructure,
+  StandardHuStructure,
+} from './hu';
 
 export {
   advanceTurn,

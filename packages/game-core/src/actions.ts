@@ -24,6 +24,11 @@ export type DeclareAnGangAction = {
   playerIndex: number;
   tileFace: OrdinaryTileFace;
 };
+export type DeclareBuGangAction = {
+  type: 'DECLARE_BU_GANG';
+  playerIndex: number;
+  meldId: string;
+};
 export type ClaimReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
 export type ReactionAction = SubmitReactionAction | PassReactionAction | ClaimReactionAction;
 export type GameAction =
@@ -32,4 +37,5 @@ export type GameAction =
   | DiscardAction
   | ReactionAction
   | ResolveReactionWindowAction
-  | DeclareAnGangAction;
+  | DeclareAnGangAction
+  | DeclareBuGangAction;

@@ -107,10 +107,7 @@ describe('Meld player state model', () => {
 
   it('starts newly prepared match hands with empty melds without changing scores', () => {
     const started = startCurrentHand(createMatch());
-    const completed = completeCurrentHand(started, {
-      dealerTransition: 'advance',
-      reason: 'normal-dealer-advance',
-    });
+    const completed = completeCurrentHand(withEndedDraw(started));
     const prepared = prepareNextHand(completed);
     const restarted = startCurrentHand(prepared);
 
@@ -199,6 +196,7 @@ describe('MingGang reaction execution', () => {
         status: 'pending',
       },
     ]);
+    expect(result.handProgressFacts.successfulMingOrBuGangCount).toBe(1);
     expect('cumulativeScores' in result).toBe(false);
     expect(applyAction(result, { type: 'DRAW_TILE' })).toBe(result);
   });
@@ -251,6 +249,10 @@ describe('MingGang reaction execution', () => {
       transfers: flowerTransfers(1),
       status: 'pending',
     });
+    expect(result.handProgressFacts).toMatchObject({
+      successfulMingOrBuGangCount: 1,
+      flowerKongCount: 1,
+    });
   });
 
   it('keeps a successful gang when the only tail tile is a flower, but suppresses its final flower-kong event', () => {
@@ -282,6 +284,7 @@ describe('MingGang reaction execution', () => {
         status: 'pending',
       },
     ]);
+    expect(result.handProgressFacts.flowerKongCount).toBe(0);
     expect(result.nextMeldSequence).toBe(2);
     expect(result.lastDiscard).toBeUndefined();
     expect(result.reactionWindow?.status).toBe('closed');
@@ -453,7 +456,10 @@ describe('MingGang reaction execution', () => {
       'selected hand tile ID matches the discard ID',
       (state: GameState) => {
         const player = playerAt(state, 1);
-        const discardedTile = state.reactionWindow?.discardedTile;
+        const discardedTile =
+          state.reactionWindow?.source === 'discard'
+            ? state.reactionWindow.discardedTile
+            : undefined;
 
         if (!discardedTile || !isOrdinaryHandTile(discardedTile)) {
           throw new Error('Missing ordinary discarded tile for ID conflict test');
@@ -764,6 +770,58 @@ function ordinaryTileById(tiles: readonly MahjongTile[], id: TileId): OrdinaryHa
   return tile;
 }
 
+function withEndedDraw(match: MatchState): MatchState {
+  return {
+    ...match,
+    currentHand: {
+      ...match.currentHand,
+      phase: 'ended',
+      turnStage: 'hand-ended',
+      pendingAction: { playerIndex: null, seat: null, type: 'none' },
+      result: { type: 'draw', reason: 'wall-exhausted' },
+    },
+  };
+}
+
+function withEndedWin(
+  match: MatchState,
+  winnerPlayerIndex: number,
+  payerPlayerIndex: number,
+): MatchState {
+  const winningTile = ordinaryTileById(createNanjingMahjongDeck(), 'wind-east-1');
+  return {
+    ...match,
+    currentHand: {
+      ...match.currentHand,
+      phase: 'ended',
+      turnStage: 'hand-ended',
+      pendingAction: { playerIndex: null, seat: null, type: 'none' },
+      result: {
+        type: 'win',
+        source: 'discard',
+        winningTile,
+        payerPlayerIndex,
+        winners: [
+          {
+            playerIndex: winnerPlayerIndex,
+            evaluation: {
+              structure: {
+                type: 'standard',
+                existingMeldCount: 4,
+                pair: { category: 'wind', wind: 'east' },
+                concealedMelds: [],
+              },
+              patterns: ['men-qing'],
+              hardFlowerCount: 0,
+              softFlowerCount: 0,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
 function flowerTileById(tiles: readonly MahjongTile[], id: TileId): FlowerTile {
   const tile = tileById(tiles, id);
 
@@ -806,6 +864,7 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
       type: 'draw',
     },
     pendingScoringEvents: [],
+    handProgressFacts: createGame().handProgressFacts,
   };
 }
 
@@ -1275,9 +1334,9 @@ describe('Pending scoring event settlement', () => {
       status: 'playing' as const,
       currentHandStatus: 'playing' as const,
     };
-    expect(() =>
-      completeCurrentHand(playing, { dealerTransition: 'stay', reason: 'draw' }),
-    ).toThrow(/scoring settlement invariant failed/i);
+    expect(() => completeCurrentHand(withEndedDraw(playing))).toThrow(
+      /scoring settlement invariant failed/i,
+    );
     expect(noOpMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
     expect(noOpMatch.currentHand.pendingScoringEvents).toEqual([corrupt]);
 
@@ -1325,7 +1384,7 @@ describe('Pending scoring event settlement', () => {
       status: 'playing' as const,
       currentHandStatus: 'playing' as const,
     };
-    const completed = completeCurrentHand(playing, { dealerTransition: 'stay', reason: 'draw' });
+    const completed = completeCurrentHand(withEndedDraw(playing));
     expect(completed.cumulativeScores).toEqual([980, 1020, 1000, 1000]);
     expect(completed.completedHands[0]?.pendingScoringEventCount).toBe(0);
 
@@ -1554,10 +1613,7 @@ describe('Nanjing Mahjong match state', () => {
     expect(startedMatch.currentHand.pendingScoringEvents).toEqual([]);
     expect('score' in playerAt(startedMatch.currentHand, 0)).toBe(false);
 
-    const completedMatch = completeCurrentHand(startedMatch, {
-      dealerTransition: 'stay',
-      reason: 'draw',
-    });
+    const completedMatch = completeCurrentHand(withEndedDraw(startedMatch));
 
     expect(completedMatch.currentHand.pendingScoringEvents).toEqual([]);
     expect(completedMatch.cumulativeScores).toEqual([1060, 980, 980, 980]);
@@ -1565,19 +1621,17 @@ describe('Nanjing Mahjong match state', () => {
 
   it('completes a hand with dealer advance without settling scores', () => {
     const startedMatch = startMatch(createMatch());
-    const completedMatch = completeCurrentHand(startedMatch, {
-      dealerTransition: 'advance',
-      reason: 'normal-dealer-advance',
-    });
+    const completedMatch = completeCurrentHand(withEndedWin(startedMatch, 1, 0));
 
     expect(completedMatch.completedHands).toEqual([
       {
         handIndex: 0,
         dealerIndex: 0,
         effectiveDealerTurn: 1,
-        result: 'not-scored-yet',
+        result: completedMatch.currentHand.result,
         dealerTransition: 'advance',
         reason: 'normal-dealer-advance',
+        completedBy: 1,
         pendingScoringEventCount: 0,
       },
     ]);
@@ -1597,19 +1651,17 @@ describe('Nanjing Mahjong match state', () => {
 
   it('completes a hand with dealer stay without advancing effective dealer turn', () => {
     const startedMatch = startMatch(createMatch({ dealerIndex: 2 }));
-    const completedMatch = completeCurrentHand(startedMatch, {
-      dealerTransition: 'stay',
-      reason: 'dealer-win',
-    });
+    const completedMatch = completeCurrentHand(withEndedWin(startedMatch, 2, 1));
 
     expect(completedMatch.completedHands).toEqual([
       {
         handIndex: 0,
         dealerIndex: 2,
         effectiveDealerTurn: 1,
-        result: 'not-scored-yet',
+        result: completedMatch.currentHand.result,
         dealerTransition: 'stay',
         reason: 'dealer-win',
+        completedBy: 2,
         pendingScoringEventCount: 0,
       },
     ]);
@@ -1620,42 +1672,189 @@ describe('Nanjing Mahjong match state', () => {
     expect(completedMatch.cumulativeScores).toEqual([1000, 1000, 1000, 1000]);
   });
 
-  it('handles the 16th effective dealer turn from caller-provided completion', () => {
+  it('ends after a normal dealer advance on the 16th effective dealer turn with no continuation fact', () => {
     const finalAdvanceMatch = {
       ...startMatch(createMatch()),
       effectiveDealerTurn: 16,
       isFinalDealerTurn: true,
     };
-    const finalStayMatch = {
-      ...startMatch(createMatch()),
-      effectiveDealerTurn: 16,
-      isFinalDealerTurn: true,
-    };
-
-    const advanced = completeCurrentHand(finalAdvanceMatch, {
-      dealerTransition: 'advance',
-      reason: 'normal-dealer-advance',
-    });
-    const stayed = completeCurrentHand(finalStayMatch, {
-      dealerTransition: 'stay',
-      reason: 'final-turn-continuation',
-    });
+    const advanced = completeCurrentHand(withEndedWin(finalAdvanceMatch, 1, 0));
 
     expect(advanced.status).toBe('completed');
     expect(advanced.effectiveDealerTurn).toBe(16);
     expect(advanced.dealerIndex).toBe(1);
     expect(advanced.currentHandStatus).toBe('completed');
-    expect(stayed.status).toBe('playing');
-    expect(stayed.effectiveDealerTurn).toBe(16);
-    expect(stayed.dealerIndex).toBe(0);
-    expect(stayed.currentHandStatus).toBe('completed');
+  });
+
+  it.each([
+    ['a self draw', { selfDrawCount: 1 }],
+    ['a follow-discard penalty', { followDiscardPenaltyCount: 1 }],
+    ['a four-identical-discards penalty', { fourIdenticalDiscardsPenaltyCount: 1 }],
+    ['four winds gathered', { fourWindsGatheredCount: 1 }],
+    ['a successful AnGang', { successfulAnGangCount: 1 }],
+    ['two successful direct MingGang or BuGang declarations', { successfulMingOrBuGangCount: 2 }],
+    ['an established flower-kong', { flowerKongCount: 1 }],
+  ])('continues the 16th dealer turn after %s', (_name, fact) => {
+    const match = startMatch(createMatch());
+    const final = {
+      ...match,
+      effectiveDealerTurn: 16,
+      isFinalDealerTurn: true,
+      currentHand: {
+        ...match.currentHand,
+        handProgressFacts: { ...match.currentHand.handProgressFacts, ...fact },
+      },
+    };
+
+    const completed = completeCurrentHand(withEndedWin(final, 1, 0));
+
+    expect(completed.status).toBe('playing');
+    expect(completed.effectiveDealerTurn).toBe(16);
+    expect(completed.dealerIndex).toBe(0);
+    expect(completed.currentHandIndex).toBe(0);
+    expect(completed.completedHands[0]?.reason).toBe('final-turn-continuation');
+  });
+
+  it.each([
+    ['a gang-kai win', { gangKaiCount: 1 }],
+    ['a package settlement', { packageSettlementCount: 1 }],
+  ])('keeps the dealer for the existing no-advance condition: %s', (_name, fact) => {
+    const match = startMatch(createMatch());
+    const completed = completeCurrentHand(
+      withEndedWin(
+        {
+          ...match,
+          currentHand: {
+            ...match.currentHand,
+            handProgressFacts: { ...match.currentHand.handProgressFacts, ...fact },
+          },
+        },
+        1,
+        0,
+      ),
+    );
+
+    expect(completed.status).toBe('playing');
+    expect(completed.effectiveDealerTurn).toBe(1);
+    expect(completed.dealerIndex).toBe(0);
+    expect(completed.completedHands[0]?.reason).toBe('special-no-dealer-advance');
+  });
+
+  it('rejects corrupt hand progress facts without advancing the match', () => {
+    const match = withEndedWin(startMatch(createMatch()), 1, 0);
+    const corrupt = {
+      ...match,
+      currentHand: {
+        ...match.currentHand,
+        handProgressFacts: {
+          ...match.currentHand.handProgressFacts,
+          successfulAnGangCount: Number.NaN,
+        },
+      },
+    };
+    const before = structuredClone(corrupt);
+
+    expect(() => completeCurrentHand(corrupt)).toThrow(/valid result/);
+    expect(corrupt).toEqual(before);
+  });
+
+  it('does not continue the 16th dealer turn after only one direct MingGang or BuGang', () => {
+    const match = startMatch(createMatch());
+    const final = {
+      ...match,
+      effectiveDealerTurn: 16,
+      isFinalDealerTurn: true,
+      currentHand: {
+        ...match.currentHand,
+        handProgressFacts: {
+          ...match.currentHand.handProgressFacts,
+          successfulMingOrBuGangCount: 1,
+        },
+      },
+    };
+
+    expect(completeCurrentHand(withEndedWin(final, 1, 0)).status).toBe('completed');
+  });
+
+  it('continues the 16th dealer turn when a winner has a rule-defined big hand', () => {
+    const match = withEndedWin(
+      { ...startMatch(createMatch()), effectiveDealerTurn: 16, isFinalDealerTurn: true },
+      1,
+      0,
+    );
+    const winner =
+      match.currentHand.result?.type === 'win' ? match.currentHand.result.winners[0] : null;
+    if (!winner || match.currentHand.result?.type !== 'win') throw new Error('Missing win result');
+    const bigHand = {
+      ...match,
+      currentHand: {
+        ...match.currentHand,
+        result: {
+          ...match.currentHand.result,
+          winners: [
+            {
+              ...winner,
+              evaluation: {
+                ...winner.evaluation,
+                patterns: ['men-qing', 'pure-one-suit'] as const,
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    expect(completeCurrentHand(bigHand).completedHands[0]?.reason).toBe('final-turn-continuation');
+  });
+
+  it('does not apply 16th-turn continuation facts on the 15th effective dealer turn', () => {
+    const match = startMatch(createMatch());
+    const fifteenth = {
+      ...match,
+      effectiveDealerTurn: 15,
+      isFinalDealerTurn: false,
+      currentHand: {
+        ...match.currentHand,
+        handProgressFacts: { ...match.currentHand.handProgressFacts, successfulAnGangCount: 1 },
+      },
+    };
+    const completed = completeCurrentHand(withEndedWin(fifteenth, 1, 0));
+
+    expect(completed.effectiveDealerTurn).toBe(16);
+    expect(completed.dealerIndex).toBe(1);
+    expect(completed.currentHandIndex).toBe(0);
+    expect(completed.completedHands[0]?.reason).toBe('normal-dealer-advance');
+  });
+
+  it('keeps a rob-BuGang result on the 16th turn and resets facts in the prepared hand', () => {
+    const match = withEndedWin(
+      { ...startMatch(createMatch()), effectiveDealerTurn: 16, isFinalDealerTurn: true },
+      1,
+      0,
+    );
+    if (match.currentHand.result?.type !== 'win') throw new Error('Missing win result');
+    const completed = completeCurrentHand({
+      ...match,
+      currentHand: {
+        ...match.currentHand,
+        result: { ...match.currentHand.result, source: 'rob-bu-gang' },
+      },
+    });
+
+    expect(completed.status).toBe('playing');
+    expect(completed.effectiveDealerTurn).toBe(16);
+    expect(completed.dealerIndex).toBe(0);
+    expect(completed.completedHands[0]?.reason).toBe('special-no-dealer-advance');
+
+    const prepared = prepareNextHand(completed);
+    expect(prepared.currentHandIndex).toBe(1);
+    expect(prepared.currentHand.handProgressFacts).toEqual(createGame().handProgressFacts);
   });
 
   it('prepares the next ready hand after a completed hand', () => {
-    const completedMatch = completeCurrentHand(startMatch(createMatch({ dealerIndex: 3 })), {
-      dealerTransition: 'advance',
-      reason: 'normal-dealer-advance',
-    });
+    const completedMatch = completeCurrentHand(
+      withEndedWin(startMatch(createMatch({ dealerIndex: 3 })), 0, 3),
+    );
     const nextHandMatch = prepareNextHand(completedMatch);
 
     expect(nextHandMatch.status).toBe('playing');
@@ -1681,10 +1880,7 @@ describe('Nanjing Mahjong match state', () => {
   });
 
   it('starts the prepared current hand without changing cumulative scores', () => {
-    const completedMatch = completeCurrentHand(startMatch(createMatch()), {
-      dealerTransition: 'stay',
-      reason: 'dealer-win',
-    });
+    const completedMatch = completeCurrentHand(withEndedWin(startMatch(createMatch()), 0, 1));
     const readyMatch = prepareNextHand(completedMatch);
     const startedMatch = startCurrentHand(readyMatch);
 
@@ -2199,6 +2395,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         type: 'discard',
       },
       pendingScoringEvents,
+      handProgressFacts: createGame().handProgressFacts,
     };
     const action: GameAction = { type: 'DISCARD_TILE', tileId: discardedTile.id };
     const nextState = applyAction(state, action);
@@ -2214,6 +2411,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       fromSeat: 'east',
     });
     expect(nextState.reactionWindow).toEqual({
+      source: 'discard',
       discardedTile,
       fromPlayerIndex: 0,
       fromSeat: 'east',
@@ -2272,6 +2470,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       turnStage: 'waiting-for-discard',
       pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
       pendingScoringEvents: [],
+      handProgressFacts: createGame().handProgressFacts,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2329,6 +2528,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       turnStage: 'waiting-for-discard',
       pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
       pendingScoringEvents: [],
+      handProgressFacts: createGame().handProgressFacts,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2374,6 +2574,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       turnStage: 'waiting-for-discard',
       pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
       pendingScoringEvents: [],
+      handProgressFacts: createGame().handProgressFacts,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2394,6 +2595,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     const players = createInitialPlayers();
     const discardedTile = flowerTileById(deck, tileId);
     const reactionWindow: ReactionWindow = {
+      source: 'discard',
       discardedTile,
       fromPlayerIndex: 0,
       fromSeat: 'east',
@@ -2418,6 +2620,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingAction: { playerIndex: 1, seat: 'south', type: 'reaction' },
       reactionWindow,
       pendingScoringEvents: [],
+      handProgressFacts: createGame().handProgressFacts,
     };
 
     expect(NANJING_OPEN_RULE_SET.getAvailableReactions(state, reactionWindow)).toEqual([
@@ -2492,6 +2695,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         type: 'discard',
       },
       pendingScoringEvents: [],
+      handProgressFacts: createGame().handProgressFacts,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2704,10 +2908,14 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
   ] as const)('rejects peng and ming-gang for flower discard %s', (tileId) => {
     const deck = createNanjingMahjongDeck();
     const base = createWaitingForReactionState();
+    const baseWindow = base.reactionWindow;
+    if (!baseWindow || baseWindow.source !== 'discard') {
+      throw new Error('Expected discard reaction window');
+    }
     const state: GameState = {
       ...base,
       reactionWindow: {
-        ...base.reactionWindow!,
+        ...baseWindow,
         discardedTile: flowerTileById(deck, tileId),
         availableReactions: [
           { playerIndex: 1, seat: 'south', responseTypes: ['pass'] },

@@ -245,3 +245,24 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - RuleSet 在暗杠成立时通过 `getAnGangScoreTransfers` 生成 `ScoreTransfer` 快照；Game reducer 只创建 `an-gang-created` pending event，不直接修改累计分数。
 - `applyGameActionToMatch` 通过通用 settlement 在同一动作内结算暗杠及尾补产生的花杠事件。Settlement 只校验并执行事件中的 transfers，不写死暗杠金额，也不访问 RuleSet、Meld 或手牌重算。
 - 未来进园子可通过扩展暗杠事件发生时的 RuleSet context 和 transfer 输出改变付款规则，无需修改通用 settlement。
+
+## 11. 胡牌与响应窗口边界
+
+- `ReactionWindow` 是按 `source` 区分的联合类型：弃牌使用 `source: 'discard'` 并保存弃牌来源，补杠声明使用 `source: 'bu-gang'` 并只保存一份 `PendingBuGangIntent`。所有响应提交和解析逻辑必须先按来源收窄。
+- 弃牌窗口可以同时暴露胡、碰、明杠和过；解析时胡高于碰/明杠，并按 `responderOrder` 一次收集全部合法胡牌响应，实现一炮多响。补杠窗口只暴露胡和过。
+- 通用 `evaluateHuStructure` 只负责普通四面子一将、七对、龙七对和既有 Meld 对结构数量的影响；普通结构显式保存 `existingMeldCount`，使结果校验可以确认已有副露与暗手面子合计为四组，而不重跑拆牌算法。通用层不计算南京规则资格或金额。
+- `hu.ts` 同时提供集中式纯运行时校验，完整校验普通牌实体、Meld metadata、HuStructure、HuPattern、HuEvaluation、HandResult 和 Hu scoring event；Match completion 与 settlement 复用同一套边界校验。
+- `nanjing-open` RuleSet 在胡牌发生时计算门清、对对胡、全球独钓、混一色、清一色、无花果、压绝、花数与硬花资格，并生成最终 `ScoreTransfer` 快照。Settlement 只校验和执行快照，不重算胡牌公式、比下胡或付款关系。
+- 玩家放弃一次真实弃牌胡机会后记录独立的过手胡状态；该状态持续到玩家自己弃牌，期间同时禁止后续点炮胡和抢补杠胡。摸牌本身不提前解除。
+- 局结束写入 typed `HandResult`。胡牌结果只保存共同 winning tile、付款者和有序 winners/evaluation；流局结果保存耗尽原因。金额账本只存在于 pending scoring events 的 transfers 中。
+
+## 12. 补杠事务边界
+
+- 玩家每次通过运行期真实摸牌或补花/杠后尾补得到普通牌时，Reducer 只针对当时已经存在且牌面唯一的合法 Peng 写入 `BuGangDrawProvenance { targetMeldId, tileId }`。Peng 创建不回扫旧手牌；弃牌、暗手消费、补杠成立及抢补杠胡都会按实体牌清理来源记录。
+- `DECLARE_BU_GANG` 只提交玩家和原 Peng 的 `meldId`。Reducer 通过 provenance 锁定碰后由本人摸入的具体第四张实体牌，建立 `PendingBuGangIntent`，但声明阶段不移牌、不升级 Meld、不计分、不尾补；availability、声明、全 Pass finalize 与抢杠解析复用同一来源验证。
+- 抢补杠窗口全 Pass 后，Reducer 再次验证 intent，将原 Peng 在原位置升级为 BuGang：保留 `meldId`、前三张顺序、`claimedTileId` 和 `fromPlayerIndex`，末尾追加第四张，且不增加 `nextMeldSequence`。
+- 正式补杠成立时，RuleSet 生成由原点碰者向补杠者支付实际 20 分的 transfer 快照；随后复用明杠/暗杠的牌墙尾部补牌、连续补花和终局花事件抑制路径。
+- 抢补杠胡时第四张只从声明者暗手移除一次，原 Peng 保持不变；不产生补杠事件、不收补杠分、不尾补。声明者独自向每名赢家支付其单份胡牌分三份，并按敞开头比下胡生成最终快照。
+- `GameState.handProgressFacts` 保存结算队列清空后仍需用于庄家推进和第16局判断的最小 typed 局内事实。成功暗杠、成功直接明杠/补杠和实际成立的花杠在正式 gameplay 事件处累计；杠开、包子结算、自摸、两类罚分和四风归齐也有独立计数字段，以覆盖权威续庄决策。当前阶段尚无对应 action 的字段保持为零；新手牌全部归零，声明失败或终局抑制事件不计入。
+- `applyGameActionToMatch` 在同一次动作中结算胡牌、补杠和尾补花杠事件。`completeCurrentHand` 只接受已经 ended、具有完整合法 typed result 且局内事实合法的 hand，并从 result 与可信 facts 推导庄家推进；抢补杠、一炮多响、庄家胡和流局仍不过庄，第16有效庄家轮次再按权威八类额外条件决定续庄。
+- 未来自摸入口复用同一 Hu evaluator、Hu evaluation、`PendingHuScoringEvent`、`HandResult` 和 transfer settlement。未来进园子只需改变 RuleSet 事件时输出；当前阶段没有自摸 action、UI 或网络响应计时器。

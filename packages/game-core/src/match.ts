@@ -1,10 +1,11 @@
 import { applyAction, createGame, startGame } from './engine';
 import type { GameAction } from './actions';
+import { isValidHandResult, isValidPendingHuScoringEvent } from './hu';
 import { copyPlayers, SEATS } from './player';
 import type { Seat } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
 import type { RuleSetId } from './rules';
-import type { GameState } from './state';
+import type { GameState, HandProgressFacts, HandResult } from './state';
 
 const FLOWER_KONG_KINDS = new Set([
   'red-center',
@@ -38,12 +39,12 @@ export interface HandCompletion {
   readonly notes?: string;
 }
 
-export type CompletedHandResult = 'unknown' | 'not-scored-yet';
+export type CompletedHandResult = HandResult;
 
 export interface CompletedHandSummary {
   readonly handIndex: number;
   readonly dealerIndex: number;
-  readonly result: CompletedHandResult;
+  readonly result: HandResult;
   readonly effectiveDealerTurn?: number;
   readonly dealerTransition?: DealerTransition;
   readonly reason?: HandCompletionReason;
@@ -224,6 +225,20 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
       if (typeof candidate.meldId !== 'string' || candidate.meldId.length === 0) {
         throw settlementError(`event ${eventIndex} meldId is invalid`);
       }
+    } else if (candidate.type === 'bu-gang-created') {
+      const receiver = validPlayerIndex(candidate.playerIndex, players.length, eventIndex);
+      const payer = validPlayerIndex(candidate.payerPlayerIndex, players.length, eventIndex);
+      if (receiver === payer) throw settlementError(`event ${eventIndex} payer equals receiver`);
+      if (typeof candidate.meldId !== 'string' || candidate.meldId.length === 0) {
+        throw settlementError(`event ${eventIndex} meldId is invalid`);
+      }
+    } else if (candidate.type === 'hu-resolved') {
+      if (!isValidPendingHuScoringEvent(candidate, players.length)) {
+        throw settlementError(`event ${eventIndex} Hu metadata is invalid`);
+      }
+      const winner = validPlayerIndex(candidate.winnerPlayerIndex, players.length, eventIndex);
+      const payer = validPlayerIndex(candidate.payerPlayerIndex, players.length, eventIndex);
+      if (winner === payer) throw settlementError(`event ${eventIndex} payer equals winner`);
     } else if (candidate.type === 'flower-kong-created') {
       const receiver = validPlayerIndex(candidate.playerIndex, players.length, eventIndex);
       const player = players[receiver];
@@ -294,7 +309,7 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
   };
 }
 
-export function completeCurrentHand(match: MatchState, completion: HandCompletion): MatchState {
+export function completeCurrentHand(match: MatchState): MatchState {
   if (match.status !== 'playing') {
     throw new Error('Current match must be playing before a hand can complete');
   }
@@ -303,7 +318,25 @@ export function completeCurrentHand(match: MatchState, completion: HandCompletio
     throw new Error('Current hand must be playing before it can complete');
   }
 
+  if (
+    match.currentHand.phase !== 'ended' ||
+    !isValidHandResult(match.currentHand.result, match.currentHand.players.length) ||
+    !isValidHandProgressFacts(match.currentHand.handProgressFacts)
+  ) {
+    throw new Error('Current hand must be ended with a valid result before it can complete');
+  }
+
   const settledMatch = settlePendingScoringEvents(match);
+  const result = settledMatch.currentHand.result;
+  if (!result || !isValidHandResult(result, settledMatch.currentHand.players.length)) {
+    throw new Error('Current hand result became invalid during settlement');
+  }
+  const completion = completionFromResult(
+    result,
+    match.dealerIndex,
+    match.effectiveDealerTurn === match.totalEffectiveDealerTurns,
+    match.currentHand.handProgressFacts,
+  );
 
   const shouldAdvanceDealer = completion.dealerTransition === 'advance';
   const nextDealerIndex = shouldAdvanceDealer
@@ -318,7 +351,7 @@ export function completeCurrentHand(match: MatchState, completion: HandCompletio
     handIndex: match.currentHandIndex,
     dealerIndex: match.dealerIndex,
     effectiveDealerTurn: match.effectiveDealerTurn,
-    result: 'not-scored-yet',
+    result,
     dealerTransition: completion.dealerTransition,
     reason: completion.reason,
     ...(completion.completedBy === undefined ? {} : { completedBy: completion.completedBy }),
@@ -348,6 +381,78 @@ export function completeCurrentHand(match: MatchState, completion: HandCompletio
     completedHands: [...match.completedHands, summary],
     isFinalDealerTurn: nextEffectiveDealerTurn === match.totalEffectiveDealerTurns,
   };
+}
+
+function completionFromResult(
+  result: HandResult,
+  dealerIndex: number,
+  isFinalDealerTurn: boolean,
+  facts: HandProgressFacts,
+): HandCompletion {
+  if (result.type === 'draw') return { dealerTransition: 'stay', reason: 'draw' };
+  if (result.source === 'rob-bu-gang' || result.winners.length > 1) {
+    return { dealerTransition: 'stay', reason: 'special-no-dealer-advance' };
+  }
+  if (facts.gangKaiCount > 0 || facts.packageSettlementCount > 0) {
+    return { dealerTransition: 'stay', reason: 'special-no-dealer-advance' };
+  }
+  if (result.winners[0]?.playerIndex === dealerIndex) {
+    return {
+      dealerTransition: 'stay',
+      reason: 'dealer-win',
+      completedBy: dealerIndex,
+    };
+  }
+  const normalAdvance: HandCompletion = {
+    dealerTransition: 'advance',
+    reason: 'normal-dealer-advance',
+    completedBy: result.winners[0]?.playerIndex,
+  };
+  return isFinalDealerTurn && hasFinalTurnContinuation(result, facts)
+    ? {
+        dealerTransition: 'stay',
+        reason: 'final-turn-continuation',
+        completedBy: result.winners[0]?.playerIndex,
+      }
+    : normalAdvance;
+}
+
+function hasFinalTurnContinuation(result: HandResult, facts: HandProgressFacts): boolean {
+  const hasBigHand =
+    result.type === 'win' &&
+    result.winners.some(
+      (winner) =>
+        winner.evaluation.patterns.length > 1 ||
+        winner.evaluation.patterns.some((pattern) => pattern !== 'men-qing'),
+    );
+  return (
+    facts.selfDrawCount > 0 ||
+    facts.followDiscardPenaltyCount > 0 ||
+    facts.fourIdenticalDiscardsPenaltyCount > 0 ||
+    facts.fourWindsGatheredCount > 0 ||
+    facts.successfulAnGangCount > 0 ||
+    facts.successfulMingOrBuGangCount >= 2 ||
+    facts.flowerKongCount > 0 ||
+    hasBigHand
+  );
+}
+
+function isValidHandProgressFacts(value: unknown): value is HandProgressFacts {
+  if (!isRecord(value)) return false;
+  return [
+    value.successfulAnGangCount,
+    value.successfulMingOrBuGangCount,
+    value.flowerKongCount,
+    value.gangKaiCount,
+    value.packageSettlementCount,
+    value.selfDrawCount,
+    value.followDiscardPenaltyCount,
+    value.fourIdenticalDiscardsPenaltyCount,
+    value.fourWindsGatheredCount,
+  ].every(
+    (count) =>
+      typeof count === 'number' && Number.isFinite(count) && Number.isInteger(count) && count >= 0,
+  );
 }
 
 export function prepareNextHand(match: MatchState): MatchState {

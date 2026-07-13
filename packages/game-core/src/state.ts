@@ -1,4 +1,5 @@
 import type { ReactionResponseType } from './actions';
+import type { HuStructure } from './hu';
 import type { PlayerState } from './player';
 import type { RuleSetId } from './rules/RuleSet';
 
@@ -144,15 +145,33 @@ export interface ReactionResponse {
 
 export type ReactionWindowStatus = 'open' | 'awaiting-resolution' | 'closed';
 
-export interface ReactionWindow {
-  readonly discardedTile: Tile;
-  readonly fromPlayerIndex: number;
-  readonly fromSeat: PlayerState['seat'];
+export interface ReactionWindowBase {
   readonly responderOrder: readonly ReactionResponder[];
   readonly availableReactions: readonly ReactionAvailability[];
   readonly responses: readonly ReactionResponse[];
   readonly status: ReactionWindowStatus;
 }
+
+export interface DiscardReactionWindow extends ReactionWindowBase {
+  readonly source: 'discard';
+  readonly discardedTile: Tile;
+  readonly fromPlayerIndex: number;
+  readonly fromSeat: PlayerState['seat'];
+}
+
+export interface PendingBuGangIntent {
+  readonly declarerPlayerIndex: number;
+  readonly declarerSeat: PlayerState['seat'];
+  readonly targetMeldId: string;
+  readonly tile: OrdinaryHandTile;
+}
+
+export interface BuGangReactionWindow extends ReactionWindowBase {
+  readonly source: 'bu-gang';
+  readonly intent: PendingBuGangIntent;
+}
+
+export type ReactionWindow = DiscardReactionWindow | BuGangReactionWindow;
 
 export type FlowerKongKind =
   FourCopyFlowerKind | 'plum-orchid-bamboo-chrysanthemum' | 'spring-summer-autumn-winter';
@@ -193,8 +212,83 @@ export interface PendingAnGangScoringEvent {
   readonly status: 'pending';
 }
 
+export type HuSource = 'discard' | 'rob-bu-gang';
+export type HuPattern =
+  | 'men-qing'
+  | 'all-pungs'
+  | 'global-single-wait'
+  | 'mixed-one-suit'
+  | 'pure-one-suit'
+  | 'seven-pairs'
+  | 'dragon-seven-pairs'
+  | 'no-flower'
+  | 'pressure-absolute';
+
+export interface HuEvaluation {
+  readonly structure: HuStructure;
+  readonly patterns: readonly HuPattern[];
+  readonly hardFlowerCount: number;
+  readonly softFlowerCount: number;
+}
+
+export interface PendingHuScoringEvent {
+  readonly type: 'hu-resolved';
+  readonly source: HuSource;
+  readonly winnerPlayerIndex: number;
+  readonly payerPlayerIndex: number;
+  readonly winningTile: OrdinaryHandTile;
+  readonly evaluation: HuEvaluation;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+
+export interface PendingBuGangScoringEvent {
+  readonly type: 'bu-gang-created';
+  readonly playerIndex: number;
+  readonly payerPlayerIndex: number;
+  readonly meldId: string;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+
 export type PendingScoringEvent =
-  PendingFlowerKongScoringEvent | PendingMingGangScoringEvent | PendingAnGangScoringEvent;
+  | PendingFlowerKongScoringEvent
+  | PendingMingGangScoringEvent
+  | PendingAnGangScoringEvent
+  | PendingHuScoringEvent
+  | PendingBuGangScoringEvent;
+
+export interface DrawHandResult {
+  readonly type: 'draw';
+  readonly reason: 'wall-exhausted';
+}
+
+export interface WinHandWinner {
+  readonly playerIndex: number;
+  readonly evaluation: HuEvaluation;
+}
+
+export interface WinHandResult {
+  readonly type: 'win';
+  readonly source: HuSource;
+  readonly winningTile: OrdinaryHandTile;
+  readonly payerPlayerIndex: number;
+  readonly winners: readonly WinHandWinner[];
+}
+
+export type HandResult = DrawHandResult | WinHandResult;
+
+export interface HandProgressFacts {
+  readonly successfulAnGangCount: number;
+  readonly successfulMingOrBuGangCount: number;
+  readonly flowerKongCount: number;
+  readonly gangKaiCount: number;
+  readonly packageSettlementCount: number;
+  readonly selfDrawCount: number;
+  readonly followDiscardPenaltyCount: number;
+  readonly fourIdenticalDiscardsPenaltyCount: number;
+  readonly fourWindsGatheredCount: number;
+}
 
 export interface GameState {
   readonly nextMeldSequence: number;
@@ -209,6 +303,8 @@ export interface GameState {
   lastDiscard?: LastDiscard;
   reactionWindow?: ReactionWindow;
   pendingScoringEvents: readonly PendingScoringEvent[];
+  handProgressFacts: HandProgressFacts;
+  result?: HandResult;
 }
 
 export interface TileWall {

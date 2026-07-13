@@ -3,6 +3,7 @@ import type { PlayerState } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
 import type {
   DeclareAnGangAction,
+  DeclareBuGangAction,
   DiscardAction,
   GameAction,
   ReactionResponseType,
@@ -21,10 +22,15 @@ import {
 import type {
   DrawTileFromWallResult,
   DrawnTileResolutionResult,
+  BuGangReactionWindow,
+  DiscardReactionWindow,
   FlowerKongKind,
   FlowerReplacementResult,
   FlowerTile,
   GameState,
+  HandProgressFacts,
+  HandResult,
+  HuSource,
   MahjongTile,
   NumberTile,
   OrdinaryTileFace,
@@ -43,6 +49,7 @@ import type {
 export type {
   ClaimReactionAction,
   DeclareAnGangAction,
+  DeclareBuGangAction,
   DiscardAction,
   DrawAction,
   GameAction,
@@ -75,11 +82,25 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return resolveReactionWindowReducer(state);
     case 'DECLARE_AN_GANG':
       return declareAnGangReducer(state, action);
+    case 'DECLARE_BU_GANG':
+      return declareBuGangReducer(state, action);
     case 'PENG':
     case 'GANG':
     case 'HU':
       return reactionReducer(state);
   }
+}
+
+export interface AvailableBuGang {
+  readonly targetMeldId: string;
+  readonly tileFace: OrdinaryTileFace;
+}
+
+export function getAvailableBuGangs(state: GameState, playerIndex: number): AvailableBuGang[] {
+  return findBuGangCandidates(state, playerIndex).map((candidate) => ({
+    targetMeldId: candidate.meld.id,
+    tileFace: ordinaryTileFace(candidate.tile),
+  }));
 }
 
 export function getAvailableAnGangs(state: GameState, playerIndex: number): OrdinaryTileFace[] {
@@ -151,15 +172,21 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
   ];
   const players = state.players.map((candidate, index) =>
     index === action.playerIndex
-      ? {
-          ...candidate,
-          hand: [...drawResolution.hand],
-          flowers: [...drawResolution.flowers],
-          melds: [
-            ...candidate.melds,
-            { id: meldId, type: 'an-gang' as const, tiles: [...selectedTiles] },
-          ],
-        }
+      ? addBuGangDrawProvenance(
+          {
+            ...candidate,
+            hand: [...drawResolution.hand],
+            flowers: [...drawResolution.flowers],
+            melds: [
+              ...candidate.melds,
+              { id: meldId, type: 'an-gang' as const, tiles: [...selectedTiles] },
+            ],
+            buGangDrawProvenance: candidate.buGangDrawProvenance.filter(
+              (provenance) => !selectedIds.has(provenance.tileId),
+            ),
+          },
+          newlyDrawnOrdinaryTile(tailDraw.tile, drawResolution),
+        )
       : candidate,
   );
   const pendingScoringEvents = appendRuntimeFlowerKongEvents(
@@ -180,9 +207,65 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, action.playerIndex, 'discard'),
     pendingScoringEvents,
+    handProgressFacts: addFlowerKongFacts(
+      {
+        ...state.handProgressFacts,
+        successfulAnGangCount: state.handProgressFacts.successfulAnGangCount + 1,
+      },
+      scoringEvents,
+      pendingScoringEvents,
+    ),
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
+}
+
+export function declareBuGangReducer(state: GameState, action: DeclareBuGangAction): GameState {
+  if (
+    !Number.isInteger(action.playerIndex) ||
+    typeof action.meldId !== 'string' ||
+    action.meldId.length === 0
+  ) {
+    return state;
+  }
+  const candidate = findBuGangCandidates(state, action.playerIndex).find(
+    (value) => value.meld.id === action.meldId,
+  );
+  const declarer = state.players[action.playerIndex];
+  if (!candidate || !declarer) return state;
+
+  const responderOrder = createResponderOrder(state.players, action.playerIndex);
+  const windowShell: BuGangReactionWindow = {
+    source: 'bu-gang',
+    intent: {
+      declarerPlayerIndex: action.playerIndex,
+      declarerSeat: declarer.seat,
+      targetMeldId: candidate.meld.id,
+      tile: candidate.tile,
+    },
+    responderOrder,
+    availableReactions: [],
+    responses: [],
+    status: 'open',
+  };
+  const firstResponder = responderOrder[0];
+  if (!firstResponder) return state;
+  const stateForAvailability: GameState = {
+    ...copyGameState(state),
+    currentPlayerIndex: action.playerIndex,
+    turnStage: 'waiting-for-reaction',
+    pendingAction: createPendingAction(state.players, firstResponder.playerIndex, 'reaction'),
+    reactionWindow: windowShell,
+  };
+  return {
+    ...stateForAvailability,
+    reactionWindow: {
+      ...windowShell,
+      availableReactions: [
+        ...getRuleSet(state.ruleSetId).getAvailableReactions(stateForAvailability, windowShell),
+      ],
+    },
+  };
 }
 
 export function drawReducer(state: GameState): GameState {
@@ -223,6 +306,20 @@ export function drawReducer(state: GameState): GameState {
     hand: [...drawResolution.hand],
     flowers: [...drawResolution.flowers],
   };
+  players[state.currentPlayerIndex] = addBuGangDrawProvenance(
+    players[state.currentPlayerIndex]!,
+    newlyDrawnOrdinaryTile(headDraw.tile, drawResolution),
+  );
+
+  const pendingScoringEvents = appendRuntimeFlowerKongEvents(
+    state.ruleSetId,
+    state.pendingScoringEvents ?? [],
+    currentPlayer,
+    state.currentPlayerIndex,
+    currentPlayer.flowers,
+    drawResolution.newlyRevealedFlowers,
+    drawResolution.status === 'wall-exhausted',
+  );
 
   const nextState: GameState = {
     nextMeldSequence: state.nextMeldSequence,
@@ -234,14 +331,11 @@ export function drawReducer(state: GameState): GameState {
     phase: state.phase,
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, state.currentPlayerIndex, 'discard'),
-    pendingScoringEvents: appendRuntimeFlowerKongEvents(
-      state.ruleSetId,
-      state.pendingScoringEvents ?? [],
-      currentPlayer,
-      state.currentPlayerIndex,
-      currentPlayer.flowers,
-      drawResolution.newlyRevealedFlowers,
-      drawResolution.status === 'wall-exhausted',
+    pendingScoringEvents,
+    handProgressFacts: addFlowerKongFacts(
+      state.handProgressFacts,
+      state.pendingScoringEvents,
+      pendingScoringEvents,
     ),
   };
 
@@ -282,11 +376,15 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
 
   players[state.currentPlayerIndex] = {
     ...copiedPlayer,
+    passHu: false,
     hand: [
       ...copiedPlayer.hand.slice(0, discardedTileIndex),
       ...copiedPlayer.hand.slice(discardedTileIndex + 1),
     ],
     discardPile: [...copiedPlayer.discardPile, { tile: discardedTile }],
+    buGangDrawProvenance: copiedPlayer.buGangDrawProvenance.filter(
+      (provenance) => provenance.tileId !== discardedTile.id,
+    ),
   };
 
   const reactionWindowShell = createReactionWindow(
@@ -320,6 +418,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     lastDiscard,
     reactionWindow: reactionWindowShell,
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+    handProgressFacts: state.handProgressFacts,
   };
   const reactionWindow: ReactionWindow = {
     ...reactionWindowShell,
@@ -344,6 +443,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     lastDiscard,
     reactionWindow,
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+    handProgressFacts: state.handProgressFacts,
   };
 }
 
@@ -356,6 +456,13 @@ export function submitReactionReducer(
   playerIndex: number,
   responseType: ReactionResponseType,
 ): GameState {
+  if (
+    state.reactionWindow &&
+    state.reactionWindow.source !== 'discard' &&
+    state.reactionWindow.source !== 'bu-gang'
+  ) {
+    return state;
+  }
   if (!Number.isInteger(playerIndex) || playerIndex < 0 || playerIndex >= state.players.length) {
     return state;
   }
@@ -370,7 +477,9 @@ export function submitReactionReducer(
     state.pendingAction.type !== 'reaction' ||
     state.pendingAction.playerIndex !== playerIndex ||
     currentResponder?.playerIndex !== playerIndex ||
-    state.currentPlayerIndex !== playerIndex
+    (state.reactionWindow.source === 'discard' && state.currentPlayerIndex !== playerIndex) ||
+    (state.reactionWindow.source === 'bu-gang' &&
+      state.currentPlayerIndex !== state.reactionWindow.intent.declarerPlayerIndex)
   ) {
     return state;
   }
@@ -388,6 +497,14 @@ export function submitReactionReducer(
     seat: currentResponder.seat,
     type: responseType,
   };
+  const players =
+    state.reactionWindow.source === 'discard' &&
+    responseType !== 'hu' &&
+    availability.responseTypes.includes('hu')
+      ? state.players.map((player, index) =>
+          index === playerIndex ? { ...player, passHu: true } : player,
+        )
+      : state.players;
   const responses = [...state.reactionWindow.responses, response];
   const nextResponder = state.reactionWindow.responderOrder[responses.length];
   const reactionWindow: ReactionWindow = {
@@ -399,7 +516,11 @@ export function submitReactionReducer(
   if (nextResponder) {
     return {
       ...copyGameState(state),
-      currentPlayerIndex: nextResponder.playerIndex,
+      players: copyPlayers(players),
+      currentPlayerIndex:
+        reactionWindow.source === 'discard'
+          ? nextResponder.playerIndex
+          : reactionWindow.intent.declarerPlayerIndex,
       turnStage: 'waiting-for-reaction',
       pendingAction: createPendingAction(state.players, nextResponder.playerIndex, 'reaction'),
       reactionWindow,
@@ -408,7 +529,11 @@ export function submitReactionReducer(
 
   return {
     ...copyGameState(state),
-    currentPlayerIndex: currentResponder.playerIndex,
+    players: copyPlayers(players),
+    currentPlayerIndex:
+      reactionWindow.source === 'discard'
+        ? currentResponder.playerIndex
+        : reactionWindow.intent.declarerPlayerIndex,
     turnStage: 'waiting-for-reaction',
     pendingAction: createNoPendingAction(),
     reactionWindow,
@@ -417,6 +542,8 @@ export function submitReactionReducer(
 
 export function resolveReactionWindowReducer(state: GameState): GameState {
   const window = state.reactionWindow;
+
+  if (window && window.source !== 'discard' && window.source !== 'bu-gang') return state;
 
   if (
     state.phase !== 'playing' ||
@@ -434,6 +561,15 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
   }
 
   const nonPassResponses = window.responses.filter((response) => response.type !== 'pass');
+  const huResponses = nonPassResponses.filter((response) => response.type === 'hu');
+
+  if (huResponses.length > 0) {
+    return resolveHu(state, window, huResponses);
+  }
+
+  if (window.source === 'bu-gang') {
+    return nonPassResponses.length === 0 ? finalizeBuGang(state, window) : state;
+  }
 
   if (nonPassResponses.length === 1 && nonPassResponses[0]?.type === 'peng') {
     return resolvePeng(state, window, nonPassResponses[0]);
@@ -460,7 +596,7 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
 
 function resolveMingGang(
   state: GameState,
-  window: ReactionWindow,
+  window: DiscardReactionWindow,
   response: ReactionResponse,
 ): GameState {
   const playerIndex = response.playerIndex;
@@ -538,12 +674,18 @@ function resolveMingGang(
   };
   const players = state.players.map((candidate, index) => {
     if (index === playerIndex) {
-      return {
-        ...candidate,
-        hand: [...drawResolution.hand],
-        flowers: [...drawResolution.flowers],
-        melds: [...candidate.melds, meld],
-      };
+      return addBuGangDrawProvenance(
+        {
+          ...candidate,
+          hand: [...drawResolution.hand],
+          flowers: [...drawResolution.flowers],
+          melds: [...candidate.melds, meld],
+          buGangDrawProvenance: candidate.buGangDrawProvenance.filter(
+            (provenance) => !selectedIds.has(provenance.tileId),
+          ),
+        },
+        newlyDrawnOrdinaryTile(tailDraw.tile, drawResolution),
+      );
     }
 
     if (index === window.fromPlayerIndex) {
@@ -596,6 +738,14 @@ function resolveMingGang(
     pendingAction: createPendingAction(players, playerIndex, 'discard'),
     reactionWindow: { ...window, status: 'closed' },
     pendingScoringEvents,
+    handProgressFacts: addFlowerKongFacts(
+      {
+        ...state.handProgressFacts,
+        successfulMingOrBuGangCount: state.handProgressFacts.successfulMingOrBuGangCount + 1,
+      },
+      scoringEvents,
+      pendingScoringEvents,
+    ),
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
@@ -603,7 +753,7 @@ function resolveMingGang(
 
 function resolvePeng(
   state: GameState,
-  window: ReactionWindow,
+  window: DiscardReactionWindow,
   response: ReactionResponse,
 ): GameState {
   const pengPlayerIndex = response.playerIndex;
@@ -667,6 +817,9 @@ function resolvePeng(
         ...player,
         hand: player.hand.filter((tile) => !selectedTileIds.has(tile.id)),
         melds: [...player.melds, meld],
+        buGangDrawProvenance: player.buGangDrawProvenance.filter(
+          (provenance) => !selectedTileIds.has(provenance.tileId),
+        ),
       };
     }
 
@@ -696,6 +849,227 @@ function resolvePeng(
     nextMeldSequence: state.nextMeldSequence + 1,
   };
 }
+
+function resolveHu(
+  state: GameState,
+  window: ReactionWindow,
+  huResponses: readonly ReactionResponse[],
+): GameState {
+  const targetTile =
+    window.source === 'discard'
+      ? isOrdinaryHandTile(window.discardedTile)
+        ? window.discardedTile
+        : null
+      : window.intent.tile;
+  const payerPlayerIndex =
+    window.source === 'discard' ? window.fromPlayerIndex : window.intent.declarerPlayerIndex;
+  if (!targetTile) return state;
+  const pendingIntent =
+    window.source === 'bu-gang' ? validatePendingBuGangIntent(state, window) : null;
+  if (window.source === 'bu-gang' && !pendingIntent) return state;
+
+  const ruleSet = getRuleSet(state.ruleSetId);
+  const winners = huResponses.map((response) => {
+    const player = state.players[response.playerIndex];
+    const availability = window.availableReactions.find(
+      (candidate) => candidate.playerIndex === response.playerIndex,
+    );
+    if (!player || !availability?.responseTypes.includes('hu')) return null;
+    const evaluation = ruleSet.evaluateHu({
+      source: window.source === 'discard' ? 'discard' : 'rob-bu-gang',
+      winnerPlayerIndex: response.playerIndex,
+      payerPlayerIndex,
+      playerCount: state.players.length,
+      winningTile: targetTile,
+      concealedTiles: player.hand,
+      melds: player.melds,
+      flowers: player.flowers,
+      allMelds: state.players.flatMap((candidate) => candidate.melds),
+    });
+    return evaluation ? { playerIndex: response.playerIndex, evaluation } : null;
+  });
+  if (winners.some((winner) => winner === null)) return state;
+  const validWinners = winners.filter((winner) => winner !== null);
+  if (validWinners.length === 0) return state;
+
+  const source: HuSource = window.source === 'discard' ? 'discard' : 'rob-bu-gang';
+  const pendingScoringEvents: PendingScoringEvent[] = [
+    ...state.pendingScoringEvents,
+    ...validWinners.map((winner) => ({
+      type: 'hu-resolved' as const,
+      source,
+      winnerPlayerIndex: winner.playerIndex,
+      payerPlayerIndex,
+      winningTile: targetTile,
+      evaluation: winner.evaluation,
+      transfers: ruleSet
+        .getHuScoreTransfers({
+          source,
+          winnerPlayerIndex: winner.playerIndex,
+          payerPlayerIndex,
+          playerCount: state.players.length,
+          evaluation: winner.evaluation,
+        })
+        .map((transfer) => ({ ...transfer })),
+      status: 'pending' as const,
+    })),
+  ];
+  const players =
+    window.source === 'bu-gang' && pendingIntent
+      ? state.players.map((player, index) =>
+          index === payerPlayerIndex
+            ? {
+                ...player,
+                hand: player.hand.filter((tile) => tile.id !== pendingIntent.tile.id),
+                buGangDrawProvenance: player.buGangDrawProvenance.filter(
+                  (provenance) => provenance.tileId !== pendingIntent.tile.id,
+                ),
+              }
+            : player,
+        )
+      : state.players;
+
+  return {
+    ...copyGameState(state),
+    players: copyPlayers(players),
+    currentPlayerIndex: payerPlayerIndex,
+    phase: 'ended',
+    turnStage: 'hand-ended',
+    pendingAction: createNoPendingAction(),
+    reactionWindow: { ...window, status: 'closed' },
+    pendingScoringEvents,
+    result: {
+      type: 'win',
+      source,
+      winningTile: targetTile,
+      payerPlayerIndex,
+      winners: validWinners,
+    },
+  };
+}
+
+function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameState {
+  const pendingIntent = validatePendingBuGangIntent(state, window);
+  if (!pendingIntent || state.wall.length === 0) return state;
+  const { declarer, meld, tile } = pendingIntent;
+  const payerPlayerIndex = meld.fromPlayerIndex;
+  if (payerPlayerIndex === undefined) return state;
+  const tailDraw = drawTileFromWallTail(createTileWall(state.wall));
+  if (tailDraw.status === 'wall-exhausted') return state;
+  const drawResolution = resolveDrawnTileWithFlowerReplacement(
+    declarer.hand.filter((candidate) => candidate.id !== tile.id),
+    declarer.flowers,
+    tailDraw.tile,
+    tailDraw.wall,
+  );
+  const upgradedMeld = { ...meld, type: 'bu-gang' as const, tiles: [...meld.tiles, tile] };
+  const players = state.players.map((player, index) =>
+    index === window.intent.declarerPlayerIndex
+      ? addBuGangDrawProvenance(
+          {
+            ...player,
+            hand: [...drawResolution.hand],
+            flowers: [...drawResolution.flowers],
+            melds: player.melds.map((candidate) =>
+              candidate.id === meld.id ? upgradedMeld : candidate,
+            ),
+            buGangDrawProvenance: player.buGangDrawProvenance.filter(
+              (provenance) => provenance.targetMeldId !== meld.id && provenance.tileId !== tile.id,
+            ),
+          },
+          newlyDrawnOrdinaryTile(tailDraw.tile, drawResolution),
+        )
+      : player,
+  );
+  const scoringEvents: PendingScoringEvent[] = [
+    ...state.pendingScoringEvents,
+    {
+      type: 'bu-gang-created',
+      playerIndex: window.intent.declarerPlayerIndex,
+      payerPlayerIndex,
+      meldId: meld.id,
+      transfers: getRuleSet(state.ruleSetId)
+        .getBuGangScoreTransfers({
+          playerIndex: window.intent.declarerPlayerIndex,
+          payerPlayerIndex,
+          playerCount: state.players.length,
+          meldId: meld.id,
+        })
+        .map((transfer) => ({ ...transfer })),
+      status: 'pending',
+    },
+  ];
+  const pendingScoringEvents = appendRuntimeFlowerKongEvents(
+    state.ruleSetId,
+    scoringEvents,
+    declarer,
+    window.intent.declarerPlayerIndex,
+    declarer.flowers,
+    drawResolution.newlyRevealedFlowers,
+    drawResolution.status === 'wall-exhausted',
+  );
+  const nextState: GameState = {
+    ...state,
+    players,
+    wall: [...drawResolution.wall.tiles],
+    currentPlayerIndex: window.intent.declarerPlayerIndex,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(players, window.intent.declarerPlayerIndex, 'discard'),
+    reactionWindow: { ...window, status: 'closed' },
+    pendingScoringEvents,
+    handProgressFacts: addFlowerKongFacts(
+      {
+        ...state.handProgressFacts,
+        successfulMingOrBuGangCount: state.handProgressFacts.successfulMingOrBuGangCount + 1,
+      },
+      scoringEvents,
+      pendingScoringEvents,
+    ),
+  };
+  return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
+}
+
+interface ValidPendingBuGangIntent {
+  readonly declarer: PlayerState;
+  readonly meld: PlayerState['melds'][number];
+  readonly tile: OrdinaryHandTile;
+}
+
+function validatePendingBuGangIntent(
+  state: GameState,
+  window: BuGangReactionWindow,
+): ValidPendingBuGangIntent | null {
+  const declarer = state.players[window.intent.declarerPlayerIndex];
+  if (
+    !declarer ||
+    declarer.seat !== window.intent.declarerSeat ||
+    state.currentPlayerIndex !== window.intent.declarerPlayerIndex ||
+    !isValidOrdinaryTile(window.intent.tile) ||
+    !Array.isArray(declarer.buGangDrawProvenance) ||
+    !declarer.buGangDrawProvenance.every(isValidBuGangDrawProvenance)
+  ) {
+    return null;
+  }
+  const meld = declarer.melds.find((candidate) => candidate.id === window.intent.targetMeldId);
+  const tile = declarer.hand.find((candidate) => candidate.id === window.intent.tile.id);
+  const provenance = declarer.buGangDrawProvenance.filter(
+    (candidate) => candidate.targetMeldId === window.intent.targetMeldId,
+  );
+  if (
+    !meld ||
+    meld.type !== 'peng' ||
+    !tile ||
+    !isValidPengMeld(meld, window.intent.declarerPlayerIndex) ||
+    !isSameOrdinaryTileFace(tile, window.intent.tile) ||
+    provenance.length !== 1 ||
+    provenance[0]?.tileId !== tile.id ||
+    !meld.tiles.every((candidate) => isSameOrdinaryTileFace(candidate, tile)) ||
+    new Set([...meld.tiles.map((candidate) => candidate.id), tile.id]).size !== 4
+  ) {
+    return null;
+  }
+  return { declarer, meld, tile };
+}
 export function reactionReducer(state: GameState): GameState {
   return copyGameState(state);
 }
@@ -717,6 +1091,7 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
     turnStage: 'waiting-for-draw',
     pendingAction: createPendingAction(players, dealerIndex, 'draw'),
     pendingScoringEvents: [],
+    handProgressFacts: createEmptyHandProgressFacts(),
   };
 }
 
@@ -744,6 +1119,7 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, dealerIndex, 'discard'),
     pendingScoringEvents: [],
+    handProgressFacts: createEmptyHandProgressFacts(),
   });
 }
 
@@ -777,6 +1153,7 @@ function dealInitialHands(state: GameState): GameState {
   }
 
   let pendingScoringEvents: PendingScoringEvent[] = [];
+  let handProgressFacts = createEmptyHandProgressFacts();
 
   for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
     const player = players[playerIndex];
@@ -785,6 +1162,7 @@ function dealInitialHands(state: GameState): GameState {
       throw new Error(`Invalid player index ${playerIndex}`);
     }
 
+    const previousEvents = pendingScoringEvents;
     pendingScoringEvents = appendFlowerKongEvents(
       state.ruleSetId,
       pendingScoringEvents,
@@ -793,6 +1171,7 @@ function dealInitialHands(state: GameState): GameState {
       rawHands[playerIndex]?.filter(isFlowerTile) ?? [],
       'initial-deal',
     );
+    handProgressFacts = addFlowerKongFacts(handProgressFacts, previousEvents, pendingScoringEvents);
   }
 
   let phase: GameState['phase'] = 'playing';
@@ -817,6 +1196,7 @@ function dealInitialHands(state: GameState): GameState {
       flowers: [...replacement.flowers],
     };
     wall = replacement.wall;
+    const previousEvents = pendingScoringEvents;
     pendingScoringEvents = appendFlowerKongEvents(
       state.ruleSetId,
       pendingScoringEvents,
@@ -825,6 +1205,7 @@ function dealInitialHands(state: GameState): GameState {
       replacement.flowers,
       'initial-flower-replacement',
     );
+    handProgressFacts = addFlowerKongFacts(handProgressFacts, previousEvents, pendingScoringEvents);
 
     if (replacement.status === 'wall-exhausted') {
       phase = 'ended';
@@ -841,6 +1222,7 @@ function dealInitialHands(state: GameState): GameState {
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, state.dealerIndex, 'discard'),
     pendingScoringEvents,
+    handProgressFacts,
   };
 
   return phase === 'ended' ? markHandEnded(nextState) : nextState;
@@ -867,6 +1249,7 @@ function finishInitialDealFromRawHands(
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(nextPlayers, state.dealerIndex, 'discard'),
     pendingScoringEvents: [],
+    handProgressFacts: createEmptyHandProgressFacts(),
   };
 
   return phase === 'ended' ? markHandEnded(nextState) : nextState;
@@ -965,6 +1348,33 @@ function findFlowerKongKinds(flowers: readonly FlowerTile[]): FlowerKongKind[] {
   }
 
   return kinds;
+}
+
+function createEmptyHandProgressFacts(): HandProgressFacts {
+  return {
+    successfulAnGangCount: 0,
+    successfulMingOrBuGangCount: 0,
+    flowerKongCount: 0,
+    gangKaiCount: 0,
+    packageSettlementCount: 0,
+    selfDrawCount: 0,
+    followDiscardPenaltyCount: 0,
+    fourIdenticalDiscardsPenaltyCount: 0,
+    fourWindsGatheredCount: 0,
+  };
+}
+
+function addFlowerKongFacts(
+  facts: HandProgressFacts,
+  before: readonly PendingScoringEvent[],
+  after: readonly PendingScoringEvent[],
+): HandProgressFacts {
+  const addedCount = after
+    .slice(before.length)
+    .filter((event) => event.type === 'flower-kong-created').length;
+  return addedCount === 0
+    ? facts
+    : { ...facts, flowerKongCount: facts.flowerKongCount + addedCount };
 }
 
 function resolveDealerIndex(options: StartGameOptions, fallbackDealerIndex: number): number {
@@ -1120,6 +1530,8 @@ function copyGameState(state: GameState): GameState {
       ? {}
       : { reactionWindow: copyReactionWindow(state.reactionWindow) }),
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
+    handProgressFacts: { ...state.handProgressFacts },
+    ...(state.result === undefined ? {} : { result: copyHandResult(state.result) }),
   };
 }
 
@@ -1127,7 +1539,7 @@ function createReactionWindow(
   players: readonly PlayerState[],
   fromPlayerIndex: number,
   discardedTile: MahjongTile,
-): ReactionWindow {
+): DiscardReactionWindow {
   const discarder = players[fromPlayerIndex];
 
   if (!discarder) {
@@ -1135,6 +1547,7 @@ function createReactionWindow(
   }
 
   return {
+    source: 'discard',
     discardedTile,
     fromPlayerIndex,
     fromSeat: discarder.seat,
@@ -1167,6 +1580,9 @@ function createResponderOrder(
 function copyReactionWindow(reactionWindow: ReactionWindow): ReactionWindow {
   return {
     ...reactionWindow,
+    ...(reactionWindow.source === 'bu-gang'
+      ? { intent: { ...reactionWindow.intent, tile: { ...reactionWindow.intent.tile } } }
+      : {}),
     responderOrder: reactionWindow.responderOrder.map((responder) => ({ ...responder })),
     availableReactions: reactionWindow.availableReactions.map((availability) => ({
       ...availability,
@@ -1208,6 +1624,7 @@ function markHandEnded(state: GameState): GameState {
     phase: 'ended',
     turnStage: 'hand-ended',
     pendingAction: createNoPendingAction(),
+    result: { type: 'draw', reason: 'wall-exhausted' },
   };
 }
 
@@ -1219,8 +1636,10 @@ function isAnGangTurn(state: GameState, playerIndex: number): boolean {
   const player = state.players[playerIndex];
   const reactionWindow = state.reactionWindow;
   const followsMingGang =
+    reactionWindow?.source === 'discard' &&
     reactionWindow?.status === 'closed' &&
     reactionWindow.responses.some((response) => response.type === 'ming-gang');
+  const followsBuGang = reactionWindow?.source === 'bu-gang' && reactionWindow.status === 'closed';
 
   return (
     state.players.length === SEATS.length &&
@@ -1234,7 +1653,153 @@ function isAnGangTurn(state: GameState, playerIndex: number): boolean {
     state.pendingAction.playerIndex === playerIndex &&
     state.pendingAction.seat === player?.seat &&
     state.wall.length > 0 &&
-    (reactionWindow === undefined || followsMingGang)
+    (reactionWindow === undefined || followsMingGang || followsBuGang)
+  );
+}
+
+interface BuGangCandidate {
+  readonly meld: PlayerState['melds'][number];
+  readonly tile: OrdinaryHandTile;
+}
+
+function findBuGangCandidates(state: GameState, playerIndex: number): BuGangCandidate[] {
+  if (!isBuGangTurn(state, playerIndex)) return [];
+  const player = state.players[playerIndex];
+  if (
+    !player ||
+    !Array.isArray(player.hand) ||
+    !player.hand.every(isValidOrdinaryTile) ||
+    !Array.isArray(player.buGangDrawProvenance) ||
+    !player.buGangDrawProvenance.every(isValidBuGangDrawProvenance)
+  ) {
+    return [];
+  }
+  const entityIds = [
+    ...player.hand.map((tile) => tile.id),
+    ...player.melds.flatMap((meld) => meld.tiles.map((tile) => tile.id)),
+  ];
+  if (
+    new Set(entityIds).size !== entityIds.length ||
+    new Set(player.melds.map((meld) => meld.id)).size !== player.melds.length
+  ) {
+    return [];
+  }
+
+  const validPengs = player.melds.filter((meld) => isValidPengMeld(meld, playerIndex));
+  const duplicateFaces = new Set<string>();
+  const faceCounts = new Map<string, number>();
+  for (const meld of player.melds.filter(
+    (candidate) =>
+      candidate.type === 'peng' &&
+      candidate.tiles.length === 3 &&
+      candidate.tiles.every(isValidOrdinaryTile) &&
+      candidate.tiles[0] !== undefined &&
+      candidate.tiles.every((tile) => isSameOrdinaryTileFace(tile, candidate.tiles[0]!)),
+  )) {
+    const first = meld.tiles[0];
+    if (!first) continue;
+    const key = ordinaryTileFaceKeyValue(ordinaryTileFace(first));
+    faceCounts.set(key, (faceCounts.get(key) ?? 0) + 1);
+    if ((faceCounts.get(key) ?? 0) > 1) duplicateFaces.add(key);
+  }
+
+  return validPengs
+    .flatMap((meld): BuGangCandidate[] => {
+      const first = meld.tiles[0];
+      if (!first) return [];
+      const key = ordinaryTileFaceKeyValue(ordinaryTileFace(first));
+      if (duplicateFaces.has(key)) return [];
+      const provenance = player.buGangDrawProvenance.filter(
+        (candidate) => candidate.targetMeldId === meld.id,
+      );
+      if (provenance.length !== 1) return [];
+      const matching = player.hand.filter(
+        (tile) => tile.id === provenance[0]?.tileId && isSameOrdinaryTileFace(tile, first),
+      );
+      return matching.length === 1 ? [{ meld, tile: matching[0]! }] : [];
+    })
+    .sort((left, right) => left.meld.id.localeCompare(right.meld.id));
+}
+
+function addBuGangDrawProvenance(
+  player: PlayerState,
+  drawnTile: OrdinaryHandTile | null,
+): PlayerState {
+  if (!drawnTile) return player;
+  const matchingPengs = player.melds.filter(
+    (meld) =>
+      isValidPengMeld(meld, player.id) &&
+      meld.tiles[0] !== undefined &&
+      isSameOrdinaryTileFace(meld.tiles[0], drawnTile),
+  );
+  if (matchingPengs.length !== 1) return player;
+  return {
+    ...player,
+    buGangDrawProvenance: [
+      ...player.buGangDrawProvenance.filter((candidate) => candidate.tileId !== drawnTile.id),
+      { targetMeldId: matchingPengs[0]!.id, tileId: drawnTile.id },
+    ],
+  };
+}
+
+function newlyDrawnOrdinaryTile(
+  initiallyDrawnTile: MahjongTile,
+  resolution: DrawnTileResolutionResult,
+): OrdinaryHandTile | null {
+  if (isOrdinaryHandTile(initiallyDrawnTile)) return initiallyDrawnTile;
+  return resolution.replacementTiles.at(-1) ?? null;
+}
+
+function isValidBuGangDrawProvenance(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.targetMeldId === 'string' &&
+    value.targetMeldId.trim().length > 0 &&
+    typeof value.tileId === 'string' &&
+    value.tileId.trim().length > 0
+  );
+}
+
+function isBuGangTurn(state: GameState, playerIndex: number): boolean {
+  const player = state.players[playerIndex];
+  const reactionWindow = state.reactionWindow;
+  const followsMingGang =
+    reactionWindow?.source === 'discard' &&
+    reactionWindow.status === 'closed' &&
+    reactionWindow.responses.some((response) => response.type === 'ming-gang');
+  const followsBuGang = reactionWindow?.source === 'bu-gang' && reactionWindow.status === 'closed';
+  return (
+    state.players.length === SEATS.length &&
+    Number.isInteger(playerIndex) &&
+    playerIndex >= 0 &&
+    playerIndex < state.players.length &&
+    playerIndex === state.currentPlayerIndex &&
+    state.phase === 'playing' &&
+    state.turnStage === 'waiting-for-discard' &&
+    state.pendingAction.type === 'discard' &&
+    state.pendingAction.playerIndex === playerIndex &&
+    state.pendingAction.seat === player?.seat &&
+    state.wall.length > 0 &&
+    (reactionWindow === undefined || followsMingGang || followsBuGang)
+  );
+}
+
+function isValidPengMeld(meld: PlayerState['melds'][number], ownerPlayerIndex: number): boolean {
+  return (
+    meld.type === 'peng' &&
+    typeof meld.id === 'string' &&
+    meld.id.trim().length > 0 &&
+    meld.tiles.length === 3 &&
+    meld.tiles.every(isValidOrdinaryTile) &&
+    new Set(meld.tiles.map((tile) => tile.id)).size === 3 &&
+    meld.tiles[0] !== undefined &&
+    meld.tiles.every((tile) => isSameOrdinaryTileFace(tile, meld.tiles[0]!)) &&
+    typeof meld.claimedTileId === 'string' &&
+    meld.tiles.some((tile) => tile.id === meld.claimedTileId) &&
+    Number.isInteger(meld.fromPlayerIndex) &&
+    (meld.fromPlayerIndex ?? -1) >= 0 &&
+    (meld.fromPlayerIndex ?? SEATS.length) < SEATS.length &&
+    meld.fromPlayerIndex !== ownerPlayerIndex
   );
 }
 
@@ -1242,6 +1807,27 @@ function ordinaryTileFace(tile: OrdinaryHandTile): OrdinaryTileFace {
   return tile.category === 'number'
     ? { category: 'number', suit: tile.suit, rank: tile.rank }
     : { category: 'wind', wind: tile.wind };
+}
+
+function ordinaryTileFaceKeyValue(tileFace: OrdinaryTileFace): string {
+  return tileFace.category === 'number'
+    ? `${tileFace.suit}-${tileFace.rank}`
+    : `wind-${tileFace.wind}`;
+}
+
+function copyHandResult(result: HandResult): HandResult {
+  if (result.type === 'draw') return { ...result };
+  return {
+    ...result,
+    winningTile: { ...result.winningTile },
+    winners: result.winners.map((winner) => ({
+      ...winner,
+      evaluation: {
+        ...winner.evaluation,
+        patterns: [...winner.evaluation.patterns],
+      },
+    })),
+  };
 }
 
 function isSameOrdinaryTileFaceValue(left: OrdinaryTileFace, right: OrdinaryTileFace): boolean {
