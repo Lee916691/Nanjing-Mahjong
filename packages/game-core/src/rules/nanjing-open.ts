@@ -9,15 +9,13 @@ import {
   isSameOrdinaryTileFace,
 } from '../state';
 import type {
-  GameState,
   HuEvaluation,
   HuPattern,
   OrdinaryHandTile,
   OrdinaryTileFace,
   ReactionAvailability,
-  ReactionWindow,
 } from '../state';
-import type { HuEvaluationContext, RuleSet } from './RuleSet';
+import type { HuEvaluationContext, ReactionAvailabilityContext, RuleSet } from './RuleSet';
 
 const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
   'men-qing': 10,
@@ -29,6 +27,9 @@ const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
   'dragon-seven-pairs': 100,
   'no-flower': 30,
   'pressure-absolute': 30,
+  'tian-hu': 0,
+  'hua-kai': 10,
+  'gang-kai': 20,
 };
 
 export const NANJING_OPEN_RULE_SET: RuleSet = {
@@ -51,14 +52,29 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
     { fromPlayerIndex: payerPlayerIndex, toPlayerIndex: playerIndex, amount: 20 },
   ],
   evaluateHu: evaluateNanjingOpenHu,
-  getHuScoreTransfers: ({ source, winnerPlayerIndex, payerPlayerIndex, evaluation }) => {
+  getHuScoreTransfers: (context) => {
+    const { source, winnerPlayerIndex, evaluation } = context;
+    if (source === 'self-draw' && context.drawSource === 'initial-dealer') {
+      return otherPlayers(winnerPlayerIndex, context.playerCount).map((payerPlayerIndex) => ({
+        fromPlayerIndex: payerPlayerIndex,
+        toPlayerIndex: winnerPlayerIndex,
+        amount: 1000,
+      }));
+    }
     const unmultiplied =
       10 +
       evaluation.patterns.reduce((total, pattern) => total + PATTERN_POINTS[pattern], 0) +
       (evaluation.hardFlowerCount + evaluation.softFlowerCount) * 2;
+    if (source === 'self-draw') {
+      return otherPlayers(winnerPlayerIndex, context.playerCount).map((payerPlayerIndex) => ({
+        fromPlayerIndex: payerPlayerIndex,
+        toPlayerIndex: winnerPlayerIndex,
+        amount: unmultiplied * 2,
+      }));
+    }
     return [
       {
-        fromPlayerIndex: payerPlayerIndex,
+        fromPlayerIndex: context.payerPlayerIndex,
         toPlayerIndex: winnerPlayerIndex,
         amount: unmultiplied * (source === 'rob-bu-gang' ? 6 : 2),
       },
@@ -73,53 +89,49 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
 };
 
 function getNanjingOpenAvailableReactions(
-  state: GameState,
-  reactionWindow: ReactionWindow,
-): ReactionAvailability[] {
-  if (reactionWindow.source !== 'discard' && reactionWindow.source !== 'bu-gang') return [];
-  return reactionWindow.responderOrder.map((responder) => {
-    const player = state.players[responder.playerIndex];
-    if (!player) throw new Error(`Invalid reaction responder index ${responder.playerIndex}`);
-    const responseTypes: ReactionResponseType[] = ['pass'];
-    const targetTile =
-      reactionWindow.source === 'discard'
-        ? reactionWindow.discardedTile.category === 'flower'
-          ? null
-          : reactionWindow.discardedTile
-        : reactionWindow.intent.tile;
-    const payerPlayerIndex =
-      reactionWindow.source === 'discard'
-        ? reactionWindow.fromPlayerIndex
-        : reactionWindow.intent.declarerPlayerIndex;
+  context: ReactionAvailabilityContext,
+): ReactionAvailability {
+  const responseTypes: ReactionResponseType[] = ['pass'];
+  const targetTile =
+    context.source === 'discard'
+      ? context.discardedTile.category === 'flower'
+        ? null
+        : context.discardedTile
+      : context.targetTile;
+  const payerPlayerIndex =
+    context.source === 'discard' ? context.fromPlayerIndex : context.declarerPlayerIndex;
 
-    if (
-      targetTile &&
-      player.passHu === false &&
-      evaluateNanjingOpenHu({
-        source: reactionWindow.source === 'discard' ? 'discard' : 'rob-bu-gang',
-        winnerPlayerIndex: responder.playerIndex,
-        payerPlayerIndex,
-        playerCount: state.players.length,
-        winningTile: targetTile,
-        concealedTiles: player.hand,
-        melds: player.melds,
-        flowers: player.flowers,
-        allMelds: state.players.flatMap((candidate) => candidate.melds),
-      })
-    ) {
-      responseTypes.push('hu');
-    }
+  if (
+    targetTile &&
+    context.responderPassHu === false &&
+    evaluateNanjingOpenHu({
+      source: context.source === 'discard' ? 'discard' : 'rob-bu-gang',
+      winnerPlayerIndex: context.responderPlayerIndex,
+      payerPlayerIndex,
+      playerCount: context.playerCount,
+      winningTile: targetTile,
+      concealedTiles: context.responderConcealedTiles,
+      melds: context.responderMelds,
+      flowers: context.responderFlowers,
+      allMelds: context.allMelds,
+    })
+  ) {
+    responseTypes.push('hu');
+  }
 
-    if (reactionWindow.source === 'discard' && targetTile) {
-      const matchingTileCount = player.hand.filter((tile) =>
-        isSameOrdinaryTileFace(tile, targetTile),
-      ).length;
-      if (matchingTileCount >= 2) responseTypes.push('peng');
-      if (matchingTileCount >= 3) responseTypes.push('ming-gang');
-    }
+  if (context.source === 'discard' && targetTile) {
+    const matchingTileCount = context.responderConcealedTiles.filter((tile) =>
+      isSameOrdinaryTileFace(tile, targetTile),
+    ).length;
+    if (matchingTileCount >= 2) responseTypes.push('peng');
+    if (matchingTileCount >= 3 && context.canDrawFromWallTail) responseTypes.push('ming-gang');
+  }
 
-    return { playerIndex: responder.playerIndex, seat: responder.seat, responseTypes };
-  });
+  return {
+    playerIndex: context.responderPlayerIndex,
+    seat: context.responderSeat,
+    responseTypes,
+  };
 }
 
 function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | null {
@@ -129,6 +141,10 @@ function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | nul
     melds: context.melds,
   });
   if (!structure) return null;
+
+  if (context.source === 'self-draw' && context.drawSource === 'initial-dealer') {
+    return { structure, patterns: ['tian-hu'], hardFlowerCount: 0, softFlowerCount: 0 };
+  }
 
   const patterns: HuPattern[] = [];
   const menQing = context.melds.every((meld) => meld.type !== 'peng');
@@ -170,6 +186,18 @@ function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | nul
   if (structure.type === 'dragon-seven-pairs') patterns.push('dragon-seven-pairs');
   if (context.flowers.length === 0) patterns.push('no-flower');
   if (pressureAbsolute) patterns.push('pressure-absolute');
+  if (context.source === 'self-draw') {
+    if (
+      context.drawSource === 'ming-gang-tail' ||
+      context.drawSource === 'an-gang-tail' ||
+      context.drawSource === 'bu-gang-tail' ||
+      (context.drawSource === 'flower-replacement' && context.formedFlowerKongDuringReplacement)
+    ) {
+      patterns.push('gang-kai');
+    } else if (context.drawSource === 'flower-replacement') {
+      patterns.push('hua-kai');
+    }
+  }
 
   const qualifiesWithoutHardFlowers =
     menQing ||

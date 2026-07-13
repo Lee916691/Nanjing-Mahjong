@@ -212,7 +212,28 @@ export interface PendingAnGangScoringEvent {
   readonly status: 'pending';
 }
 
-export type HuSource = 'discard' | 'rob-bu-gang';
+export type SelfDrawSource =
+  | 'initial-dealer'
+  | 'wall-head'
+  | 'flower-replacement'
+  | 'ming-gang-tail'
+  | 'an-gang-tail'
+  | 'bu-gang-tail';
+
+export type SelfDrawProvenance =
+  | {
+      readonly playerIndex: number;
+      readonly tileId: OrdinaryHandTile['id'];
+      readonly source: Exclude<SelfDrawSource, 'flower-replacement'>;
+    }
+  | {
+      readonly playerIndex: number;
+      readonly tileId: OrdinaryHandTile['id'];
+      readonly source: 'flower-replacement';
+      readonly formedFlowerKongDuringReplacement: boolean;
+    };
+
+export type HuSource = 'discard' | 'rob-bu-gang' | 'self-draw';
 export type HuPattern =
   | 'men-qing'
   | 'all-pungs'
@@ -222,7 +243,10 @@ export type HuPattern =
   | 'seven-pairs'
   | 'dragon-seven-pairs'
   | 'no-flower'
-  | 'pressure-absolute';
+  | 'pressure-absolute'
+  | 'tian-hu'
+  | 'hua-kai'
+  | 'gang-kai';
 
 export interface HuEvaluation {
   readonly structure: HuStructure;
@@ -231,9 +255,9 @@ export interface HuEvaluation {
   readonly softFlowerCount: number;
 }
 
-export interface PendingHuScoringEvent {
+export interface PendingSinglePayerHuScoringEvent {
   readonly type: 'hu-resolved';
-  readonly source: HuSource;
+  readonly source: 'discard' | 'rob-bu-gang';
   readonly winnerPlayerIndex: number;
   readonly payerPlayerIndex: number;
   readonly winningTile: OrdinaryHandTile;
@@ -241,6 +265,27 @@ export interface PendingHuScoringEvent {
   readonly transfers: readonly ScoreTransfer[];
   readonly status: 'pending';
 }
+
+export type PendingSelfDrawHuScoringEvent = {
+  readonly type: 'hu-resolved';
+  readonly source: 'self-draw';
+  readonly winnerPlayerIndex: number;
+  readonly winningTile: OrdinaryHandTile;
+  readonly evaluation: HuEvaluation;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+} & (
+  | {
+      readonly drawSource: Exclude<SelfDrawSource, 'flower-replacement'>;
+    }
+  | {
+      readonly drawSource: 'flower-replacement';
+      readonly formedFlowerKongDuringReplacement: boolean;
+    }
+);
+
+export type PendingHuScoringEvent =
+  PendingSinglePayerHuScoringEvent | PendingSelfDrawHuScoringEvent;
 
 export interface PendingBuGangScoringEvent {
   readonly type: 'bu-gang-created';
@@ -268,13 +313,30 @@ export interface WinHandWinner {
   readonly evaluation: HuEvaluation;
 }
 
-export interface WinHandResult {
+export interface SinglePayerWinHandResult {
   readonly type: 'win';
-  readonly source: HuSource;
+  readonly source: 'discard' | 'rob-bu-gang';
   readonly winningTile: OrdinaryHandTile;
   readonly payerPlayerIndex: number;
   readonly winners: readonly WinHandWinner[];
 }
+
+export type SelfDrawWinHandResult = {
+  readonly type: 'win';
+  readonly source: 'self-draw';
+  readonly winningTile: OrdinaryHandTile;
+  readonly winner: WinHandWinner;
+} & (
+  | {
+      readonly drawSource: Exclude<SelfDrawSource, 'flower-replacement'>;
+    }
+  | {
+      readonly drawSource: 'flower-replacement';
+      readonly formedFlowerKongDuringReplacement: boolean;
+    }
+);
+
+export type WinHandResult = SinglePayerWinHandResult | SelfDrawWinHandResult;
 
 export type HandResult = DrawHandResult | WinHandResult;
 
@@ -304,6 +366,7 @@ export interface GameState {
   reactionWindow?: ReactionWindow;
   pendingScoringEvents: readonly PendingScoringEvent[];
   handProgressFacts: HandProgressFacts;
+  selfDrawProvenance?: SelfDrawProvenance;
   result?: HandResult;
 }
 

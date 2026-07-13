@@ -410,6 +410,11 @@ describe('AnGang execution', () => {
     expect(result.phase).toBe('playing');
     expect(result.turnStage).toBe('waiting-for-discard');
     expect(player(result).hand.map((tile) => tile.id)).toEqual(['tong-9-1']);
+    expect(result.selfDrawProvenance).toEqual({
+      playerIndex: 0,
+      tileId: 'tong-9-1',
+      source: 'an-gang-tail',
+    });
   });
 
   it('returns the original reference for illegal declarations without changing any field', () => {
@@ -575,6 +580,11 @@ describe('AnGang execution', () => {
       playerIndex: 1,
       seat: 'south',
       type: 'ming-gang',
+    });
+    expect(afterMingGang.selfDrawProvenance).toEqual({
+      playerIndex: 1,
+      tileId: 'tong-9-1',
+      source: 'ming-gang-tail',
     });
     expect(getAvailableAnGangs(afterMingGang, 1)).toEqual([face('number', 'tiao', 1)]);
 

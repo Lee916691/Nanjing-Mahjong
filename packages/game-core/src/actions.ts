@@ -29,6 +29,10 @@ export type DeclareBuGangAction = {
   playerIndex: number;
   meldId: string;
 };
+export type DeclareSelfDrawHuAction = {
+  type: 'DECLARE_SELF_DRAW_HU';
+  playerIndex: number;
+};
 export type ClaimReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
 export type ReactionAction = SubmitReactionAction | PassReactionAction | ClaimReactionAction;
 export type GameAction =
@@ -38,4 +42,5 @@ export type GameAction =
   | ReactionAction
   | ResolveReactionWindowAction
   | DeclareAnGangAction
-  | DeclareBuGangAction;
+  | DeclareBuGangAction
+  | DeclareSelfDrawHuAction;

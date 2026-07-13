@@ -27,10 +27,14 @@ export type {
   HandResult,
   DrawHandResult,
   WinHandResult,
+  SinglePayerWinHandResult,
+  SelfDrawWinHandResult,
   WinHandWinner,
   HuEvaluation,
   HuPattern,
   HuSource,
+  SelfDrawSource,
+  SelfDrawProvenance,
   MahjongTile,
   NumberTile,
   NumberTileId,
@@ -48,6 +52,8 @@ export type {
   PendingFlowerKongScoringEvent,
   PendingMingGangScoringEvent,
   PendingHuScoringEvent,
+  PendingSinglePayerHuScoringEvent,
+  PendingSelfDrawHuScoringEvent,
   PendingScoringEvent,
   LastDiscard,
   PlantFlowerKind,
@@ -85,11 +91,14 @@ export {
 } from './rules';
 export type {
   AnGangScoringContext,
+  BuGangReactionAvailabilityContext,
   BuGangScoringContext,
+  DiscardReactionAvailabilityContext,
   FlowerKongScoringContext,
   HuEvaluationContext,
   HuScoringContext,
   MingGangScoringContext,
+  ReactionAvailabilityContext,
   RuleSet,
   RuleSetId,
 } from './rules';
@@ -102,6 +111,7 @@ export type {
   ClaimReactionAction,
   DeclareAnGangAction,
   DeclareBuGangAction,
+  DeclareSelfDrawHuAction,
   DiscardAction,
   DrawAction,
   GameAction,
@@ -129,8 +139,9 @@ export {
   replaceFlowersForSinglePlayer,
   requiresFlowerReveal,
   resolveDrawnTileWithFlowerReplacement,
+  getAvailableSelfDrawHu,
 } from './reducer';
-export type { AvailableBuGang } from './reducer';
+export type { AvailableBuGang, SelfDrawHuAvailability } from './reducer';
 
 export { evaluateHuStructure, ordinaryTileFace, ordinaryTileFaceKey } from './hu';
 export type {

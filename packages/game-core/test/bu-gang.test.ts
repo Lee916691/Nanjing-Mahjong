@@ -209,6 +209,39 @@ function createOldFourthTileAfterRealPengAndUnrelatedDraw(): GameState {
 }
 
 describe('BuGang availability and declaration', () => {
+  it('passes isolated BuGang responder snapshots with the declared target tile', () => {
+    const state = createBuGangStateThroughPublicActions();
+    const availability = vi.spyOn(NANJING_OPEN_RULE_SET, 'getAvailableReactions');
+
+    applyAction(state, { type: 'DECLARE_BU_GANG', playerIndex: 1, meldId: 'meld-1' });
+
+    expect(availability).toHaveBeenCalledTimes(3);
+    for (const call of availability.mock.calls) {
+      expect(call).toHaveLength(1);
+      expect(call[0]).toMatchObject({
+        source: 'bu-gang',
+        playerCount: 4,
+        declarerPlayerIndex: 1,
+        targetTile: { id: 'wan-7-4' },
+      });
+      expect(call[0]).not.toHaveProperty('players');
+      expect(call[0]).not.toHaveProperty('wall');
+      expect(call[0]).not.toHaveProperty('reactionWindow');
+      expect(call[0]).not.toHaveProperty('pendingAction');
+      expect(call[0]).not.toHaveProperty('phase');
+      expect(call[0]).not.toHaveProperty('turnStage');
+    }
+    expect(availability.mock.calls[0]?.[0]).toMatchObject({
+      responderPlayerIndex: 2,
+      responderSeat: 'west',
+      responderConcealedTiles: state.players[2]?.hand,
+      responderMelds: state.players[2]?.melds,
+      responderFlowers: state.players[2]?.flowers,
+      responderPassHu: state.players[2]?.passHu,
+    });
+    availability.mockRestore();
+  });
+
   it('becomes available after a real Peng, required discard, full turn cycle, and own draw', () => {
     const state = createBuGangStateThroughPublicActions();
     expect(state.currentPlayerIndex).toBe(1);
@@ -563,6 +596,11 @@ describe('BuGang all-pass finalize', () => {
     ]);
     expect(resolved.turnStage).toBe('waiting-for-discard');
     expect(resolved.currentPlayerIndex).toBe(0);
+    expect(resolved.selfDrawProvenance).toEqual({
+      playerIndex: 0,
+      tileId: 'tong-9-1',
+      source: 'bu-gang-tail',
+    });
   });
 
   it('settles in the same Match action and supports consecutive candidates after the tail draw', () => {
@@ -716,6 +754,7 @@ describe('Rob-BuGang Hu', () => {
       const resolved = respondAndResolve(declared, winners);
 
       expect(resolved.phase).toBe('ended');
+      expect(resolved.selfDrawProvenance).toBeUndefined();
       expect(resolved.result).toMatchObject({
         type: 'win',
         source: 'rob-bu-gang',

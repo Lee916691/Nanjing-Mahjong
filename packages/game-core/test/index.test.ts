@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_RULE_SET_ID,
   FLOWER_TILE_KINDS,
@@ -291,7 +291,6 @@ describe('MingGang reaction execution', () => {
   });
 
   it.each([
-    ['empty wall', (state: GameState) => ({ ...state, wall: [] })],
     [
       'insufficient matching tiles',
       (state: GameState) => ({
@@ -1783,8 +1782,15 @@ describe('Nanjing Mahjong match state', () => {
       0,
     );
     const winner =
-      match.currentHand.result?.type === 'win' ? match.currentHand.result.winners[0] : null;
-    if (!winner || match.currentHand.result?.type !== 'win') throw new Error('Missing win result');
+      match.currentHand.result?.type === 'win' && match.currentHand.result.source !== 'self-draw'
+        ? match.currentHand.result.winners[0]
+        : null;
+    if (
+      !winner ||
+      match.currentHand.result?.type !== 'win' ||
+      match.currentHand.result.source === 'self-draw'
+    )
+      throw new Error('Missing single-payer win result');
     const bigHand = {
       ...match,
       currentHand: {
@@ -1832,7 +1838,8 @@ describe('Nanjing Mahjong match state', () => {
       1,
       0,
     );
-    if (match.currentHand.result?.type !== 'win') throw new Error('Missing win result');
+    if (match.currentHand.result?.type !== 'win' || match.currentHand.result.source === 'self-draw')
+      throw new Error('Missing single-payer win result');
     const completed = completeCurrentHand({
       ...match,
       currentHand: {
@@ -2384,7 +2391,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
-      wall: [],
+      wall: [ordinaryTileById(deck, 'wan-9-1')],
       currentPlayerIndex: 0,
       dealerIndex: 0,
       phase: 'playing',
@@ -2463,7 +2470,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
-      wall: [],
+      wall: [ordinaryTileById(deck, 'wan-9-1')],
       currentPlayerIndex: 0,
       dealerIndex: 0,
       phase: 'playing',
@@ -2497,6 +2504,62 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     );
   });
 
+  it.each([
+    { wall: [] as OrdinaryHandTile[], canDrawFromWallTail: false },
+    { wall: [ordinaryTileById(createNanjingMahjongDeck(), 'wan-9-1')], canDrawFromWallTail: true },
+  ])(
+    'passes isolated discard responder snapshots with wall-tail availability $canDrawFromWallTail',
+    ({ wall, canDrawFromWallTail }) => {
+      const deck = createNanjingMahjongDeck();
+      const discardedTile = ordinaryTileById(deck, 'wan-3-1');
+      const players = createInitialPlayers();
+      players[0] = { ...players[0]!, hand: [discardedTile] };
+      players[1] = {
+        ...players[1]!,
+        hand: [ordinaryTileById(deck, 'wan-3-2'), ordinaryTileById(deck, 'wan-3-3')],
+        passHu: true,
+      };
+      const state: GameState = {
+        ...createGame(),
+        players,
+        wall,
+        phase: 'playing',
+        turnStage: 'waiting-for-discard',
+        pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
+      };
+      const availability = vi.spyOn(NANJING_OPEN_RULE_SET, 'getAvailableReactions');
+
+      applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
+
+      expect(availability).toHaveBeenCalledTimes(3);
+      for (const call of availability.mock.calls) {
+        expect(call).toHaveLength(1);
+        expect(call[0]).not.toHaveProperty('players');
+        expect(call[0]).not.toHaveProperty('wall');
+        expect(call[0]).not.toHaveProperty('reactionWindow');
+        expect(call[0]).not.toHaveProperty('pendingAction');
+        expect(call[0]).not.toHaveProperty('phase');
+        expect(call[0]).not.toHaveProperty('turnStage');
+      }
+      expect(availability.mock.calls[0]?.[0]).toMatchObject({
+        source: 'discard',
+        playerCount: 4,
+        responderPlayerIndex: 1,
+        responderSeat: 'south',
+        responderConcealedTiles: players[1]?.hand,
+        responderMelds: players[1]?.melds,
+        responderFlowers: players[1]?.flowers,
+        responderPassHu: true,
+        fromPlayerIndex: 0,
+        discardedTile,
+        canDrawFromWallTail,
+      });
+      state.players[2] = { ...state.players[2]!, hand: [ordinaryTileById(deck, 'tong-9-1')] };
+      expect(availability.mock.calls[0]?.[0]).not.toHaveProperty('players');
+      availability.mockRestore();
+    },
+  );
+
   it('offers peng and ming-gang for three matching ordinary tiles without executing either', () => {
     const deck = createNanjingMahjongDeck();
     const discardedTile = ordinaryTileById(deck, 'tong-6-1');
@@ -2521,7 +2584,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
-      wall: [],
+      wall: [ordinaryTileById(deck, 'wan-9-1')],
       currentPlayerIndex: 0,
       dealerIndex: 0,
       phase: 'playing',
@@ -2567,7 +2630,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       nextMeldSequence: 1,
       ruleSetId: DEFAULT_RULE_SET_ID,
       players,
-      wall: [],
+      wall: [ordinaryTileById(deck, 'wan-9-1')],
       currentPlayerIndex: 0,
       dealerIndex: 0,
       phase: 'playing',
@@ -2623,7 +2686,25 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
     };
 
-    expect(NANJING_OPEN_RULE_SET.getAvailableReactions(state, reactionWindow)).toEqual([
+    expect(
+      reactionWindow.responderOrder.map(({ playerIndex, seat }) => {
+        const responder = state.players[playerIndex]!;
+        return NANJING_OPEN_RULE_SET.getAvailableReactions({
+          source: 'discard',
+          playerCount: state.players.length,
+          responderPlayerIndex: playerIndex,
+          responderSeat: seat,
+          responderConcealedTiles: responder.hand,
+          responderMelds: responder.melds,
+          responderFlowers: responder.flowers,
+          responderPassHu: responder.passHu,
+          allMelds: state.players.flatMap((player) => player.melds),
+          fromPlayerIndex: 0,
+          discardedTile,
+          canDrawFromWallTail: false,
+        });
+      }),
+    ).toEqual([
       { playerIndex: 1, seat: 'south', responseTypes: ['pass'] },
       { playerIndex: 2, seat: 'west', responseTypes: ['pass'] },
       { playerIndex: 3, seat: 'north', responseTypes: ['pass'] },
@@ -2838,7 +2919,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
         },
       ];
       const base: GameState = {
-        ...createPlayingGameWithWall([]),
+        ...createPlayingGameWithWall([ordinaryTileById(deck, 'wan-9-1')]),
         players,
         turnStage: 'waiting-for-discard',
         pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
@@ -2891,12 +2972,8 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       );
       const resolved = applyAction(afterThirdResponse, { type: 'RESOLVE_REACTION_WINDOW' });
 
-      if (responseType === 'ming-gang') {
-        expect(resolved).toBe(afterThirdResponse);
-      } else {
-        expect(resolved).not.toBe(afterThirdResponse);
-        expect(playerAt(resolved, 1).melds[0]?.type).toBe('peng');
-      }
+      expect(resolved).not.toBe(afterThirdResponse);
+      expect(playerAt(resolved, 1).melds[0]?.type).toBe(responseType);
     },
   );
 
@@ -3369,27 +3446,35 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     ],
     [
       'multiple non-pass responses',
-      (state: GameState) => ({
-        ...state,
-        reactionWindow: {
-          ...state.reactionWindow!,
-          responses: state.reactionWindow!.responses.map((response, index) =>
-            index === 1 ? { ...response, type: 'ming-gang' as const } : response,
-          ),
-        },
-      }),
+      (state: GameState) => {
+        const deck = createNanjingMahjongDeck();
+        return {
+          ...state,
+          wall: [ordinaryTileById(deck, 'wan-9-1')],
+          reactionWindow: {
+            ...state.reactionWindow!,
+            responses: state.reactionWindow!.responses.map((response, index) =>
+              index === 1 ? { ...response, type: 'ming-gang' as const } : response,
+            ),
+          },
+        };
+      },
     ],
     [
       'unsupported ming-gang',
-      (state: GameState) => ({
-        ...state,
-        reactionWindow: {
-          ...state.reactionWindow!,
-          responses: state.reactionWindow!.responses.map((response) =>
-            response.type === 'peng' ? { ...response, type: 'ming-gang' as const } : response,
-          ),
-        },
-      }),
+      (state: GameState) => {
+        const deck = createNanjingMahjongDeck();
+        return {
+          ...state,
+          wall: [ordinaryTileById(deck, 'wan-9-1')],
+          reactionWindow: {
+            ...state.reactionWindow!,
+            responses: state.reactionWindow!.responses.map((response) =>
+              response.type === 'peng' ? { ...response, type: 'ming-gang' as const } : response,
+            ),
+          },
+        };
+      },
     ],
   ] as const)('returns the original state for invalid peng resolution: %s', (_name, alter) => {
     const state = alter(createAwaitingPengResolutionState());
@@ -3527,22 +3612,27 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
     expect(tileIds(currentPlayer.flowers)).toEqual(['flower-red-center-1', 'flower-fortune-1']);
   });
 
-  it('ends the game when the final ordinary head draw exhausts the wall', () => {
+  it('keeps the discard opportunity when the final ordinary head draw exhausts the wall', () => {
     const deck = createNanjingMahjongDeck();
     const state = createPlayingGameWithWall([ordinaryTileById(deck, 'wan-1-1')]);
 
     const nextState = advanceTurn(state);
 
-    expect(nextState.phase).toBe('ended');
-    expect(nextState.turnStage).toBe('hand-ended');
+    expect(nextState.phase).toBe('playing');
+    expect(nextState.turnStage).toBe('waiting-for-discard');
     expect(nextState.pendingAction).toEqual({
-      playerIndex: null,
-      seat: null,
-      type: 'none',
+      playerIndex: 0,
+      seat: 'east',
+      type: 'discard',
     });
     expect(nextState.currentPlayerIndex).toBe(0);
     expect(nextState.wall).toEqual([]);
     expect(tileIds(playerAt(nextState, 0).hand)).toEqual(['wan-1-1']);
+    expect(nextState.selfDrawProvenance).toEqual({
+      playerIndex: 0,
+      tileId: 'wan-1-1',
+      source: 'wall-head',
+    });
     expect(playerAt(state, 0).hand).toEqual([]);
     expect(tileIds(state.wall)).toEqual(['wan-1-1']);
   });

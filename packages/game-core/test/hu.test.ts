@@ -500,7 +500,7 @@ describe('discard Hu production flow', () => {
     const resolved = submitAll(opened, { 1: 'hu', 2: 'hu', 3: 'ming-gang' });
 
     expect(
-      resolved.result?.type === 'win'
+      resolved.result?.type === 'win' && resolved.result.source !== 'self-draw'
         ? resolved.result.winners.map((winner) => winner.playerIndex)
         : [],
     ).toEqual([1, 2]);
@@ -971,7 +971,9 @@ function validHandResult(): HandResult {
 }
 
 function winnerOf(result: HandResult) {
-  if (result.type !== 'win' || !result.winners[0]) throw new Error('Expected win result');
+  if (result.type !== 'win' || result.source === 'self-draw' || !result.winners[0]) {
+    throw new Error('Expected single-payer win result');
+  }
   return result.winners[0];
 }
 

@@ -249,7 +249,9 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 ## 11. 胡牌与响应窗口边界
 
 - `ReactionWindow` 是按 `source` 区分的联合类型：弃牌使用 `source: 'discard'` 并保存弃牌来源，补杠声明使用 `source: 'bu-gang'` 并只保存一份 `PendingBuGangIntent`。所有响应提交和解析逻辑必须先按来源收窄。
-- 弃牌窗口可以同时暴露胡、碰、明杠和过；解析时胡高于碰/明杠，并按 `responderOrder` 一次收集全部合法胡牌响应，实现一炮多响。补杠窗口只暴露胡和过。
+  - 弃牌窗口可以同时暴露胡、碰、明杠和过；解析时胡高于碰/明杠，并按 `responderOrder` 一次收集全部合法胡牌响应，实现一炮多响。补杠窗口只暴露胡和过。
+  - Reducer 在打开弃牌或补杠响应窗口时，从权威 `GameState` 为每名 responder 构造最小只读 `ReactionAvailabilityContext`。该 source-discriminated context 只包含 responder 手牌、副露、花牌、过手胡状态、目标牌、来源玩家和胡牌判定所需的扁平副露事实；`RuleSet.getAvailableReactions` 不接收 `GameState`、完整玩家数组或响应窗口。
+  - 弃牌 context 的 `canDrawFromWallTail` 由 Reducer 直接按当时权威 `state.wall.length > 0` 计算，不持久化也不由客户端提供。RuleSet 只基于 context 判定响应 availability；`GameState` 所有权仍在 Reducer，`ScoreTransfer` 与通用 settlement 职责不变。
 - 通用 `evaluateHuStructure` 只负责普通四面子一将、七对、龙七对和既有 Meld 对结构数量的影响；普通结构显式保存 `existingMeldCount`，使结果校验可以确认已有副露与暗手面子合计为四组，而不重跑拆牌算法。通用层不计算南京规则资格或金额。
 - `hu.ts` 同时提供集中式纯运行时校验，完整校验普通牌实体、Meld metadata、HuStructure、HuPattern、HuEvaluation、HandResult 和 Hu scoring event；Match completion 与 settlement 复用同一套边界校验。
 - `nanjing-open` RuleSet 在胡牌发生时计算门清、对对胡、全球独钓、混一色、清一色、无花果、压绝、花数与硬花资格，并生成最终 `ScoreTransfer` 快照。Settlement 只校验和执行快照，不重算胡牌公式、比下胡或付款关系。
@@ -265,4 +267,16 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - 抢补杠胡时第四张只从声明者暗手移除一次，原 Peng 保持不变；不产生补杠事件、不收补杠分、不尾补。声明者独自向每名赢家支付其单份胡牌分三份，并按敞开头比下胡生成最终快照。
 - `GameState.handProgressFacts` 保存结算队列清空后仍需用于庄家推进和第16局判断的最小 typed 局内事实。成功暗杠、成功直接明杠/补杠和实际成立的花杠在正式 gameplay 事件处累计；杠开、包子结算、自摸、两类罚分和四风归齐也有独立计数字段，以覆盖权威续庄决策。当前阶段尚无对应 action 的字段保持为零；新手牌全部归零，声明失败或终局抑制事件不计入。
 - `applyGameActionToMatch` 在同一次动作中结算胡牌、补杠和尾补花杠事件。`completeCurrentHand` 只接受已经 ended、具有完整合法 typed result 且局内事实合法的 hand，并从 result 与可信 facts 推导庄家推进；抢补杠、一炮多响、庄家胡和流局仍不过庄，第16有效庄家轮次再按权威八类额外条件决定续庄。
-- 未来自摸入口复用同一 Hu evaluator、Hu evaluation、`PendingHuScoringEvent`、`HandResult` 和 transfer settlement。未来进园子只需改变 RuleSet 事件时输出；当前阶段没有自摸 action、UI 或网络响应计时器。
+- 当前可达状态下的自摸入口复用同一 Hu evaluator、Hu evaluation、`PendingHuScoringEvent`、`HandResult` 和 transfer settlement。未来进园子只需改变 RuleSet 事件时输出；当前阶段仍没有 UI 或网络响应计时器。
+
+## 13. 当前可达状态下的自摸闭环
+
+- Phase 13A 只完成当前 action 和状态可以到达的自摸闭环，不代表规则文档中的全部自摸变体均已实现。地胡报听、杠后承包和其他包子付款重定向仍留待后续阶段，当前也不实现 UI、server 或 timer。
+- `GameState` 同一时间最多保存一份 `SelfDrawProvenance`。它绑定当前候选玩家、具体普通牌实体 ID 和 `initial-dealer`、`wall-head`、`flower-replacement`、`ming-gang-tail`、`an-gang-tail`、`bu-gang-tail` 之一，不保存摸牌历史，也不复用补杠来源证明。
+- 初始庄家来源在完整发牌与初始补花结束后建立。无初始补花时绑定庄家发牌过程中最后取得的普通牌；有初始补花时绑定庄家补花流程最终补入的普通牌。该来源只用于首次弃牌前的天胡候选。
+- 普通墙头或杠尾直接取得普通牌时记录直接来源。只要先取得花牌，最终普通牌就记录为 `flower-replacement`；该 variant 同时记录本次真实补花链是否新创建了未去重、未被终局抑制的 flower-kong event。
+- RuleSet 按来源互斥分类：直接杠尾为杠开；补花链未形成新花杠为花开；形成新花杠为杠开；初始庄家优先分类为天胡。花开与杠开不会同时出现在 evaluation 中。
+- `getAvailableSelfDrawHu` 与 `DECLARE_SELF_DRAW_HU` 共用同一候选验证边界。验证按 provenance 的实体 ID 从暗手只读副本中精确移除一次，将剩余牌作为 `concealedTiles`、该实体作为 `winningTile` 送入 evaluator，避免把已经在手中的自摸牌计算两次。
+- `SelfDrawWinHandResult` 只有一个 `winner`，不伪造 `payerPlayerIndex` 或 `winners` 数组。一个 `PendingSelfDrawHuScoringEvent` 保存 RuleSet 生成的全部付款 transfers；普通自摸由三家分别付款，天胡由三家各付1000。Settlement 仍只验证并执行 transfer 快照，不理解自摸公式或重建付款人。
+- 自摸 action 原子结束本局、清除 provenance、更新 `selfDrawCount`，杠开时同时更新 `gangKaiCount`。Match 在同一次 action 中结算事件；`completeCurrentHand` 从 typed result 与局内 facts 处理庄家自摸、闲家过庄、杠开不过庄和第16有效庄家轮次的任意自摸续庄。
+- 摸到牌墙最后一张普通牌后，本局继续保持 `waiting-for-discard`，玩家可以自摸或弃牌。若弃牌则正常开放响应窗口；无人响应且牌墙为空后流局。补花链耗尽仍立即流局，最后一张终局花的花杠事件仍被抑制。

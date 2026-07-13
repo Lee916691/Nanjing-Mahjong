@@ -233,12 +233,15 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
         throw settlementError(`event ${eventIndex} meldId is invalid`);
       }
     } else if (candidate.type === 'hu-resolved') {
+      const huEvent: Record<string, unknown> = candidate;
       if (!isValidPendingHuScoringEvent(candidate, players.length)) {
         throw settlementError(`event ${eventIndex} Hu metadata is invalid`);
       }
       const winner = validPlayerIndex(candidate.winnerPlayerIndex, players.length, eventIndex);
-      const payer = validPlayerIndex(candidate.payerPlayerIndex, players.length, eventIndex);
-      if (winner === payer) throw settlementError(`event ${eventIndex} payer equals winner`);
+      if (huEvent.source !== 'self-draw') {
+        const payer = validPlayerIndex(huEvent.payerPlayerIndex, players.length, eventIndex);
+        if (winner === payer) throw settlementError(`event ${eventIndex} payer equals winner`);
+      }
     } else if (candidate.type === 'flower-kong-created') {
       const receiver = validPlayerIndex(candidate.playerIndex, players.length, eventIndex);
       const player = players[receiver];
@@ -390,13 +393,18 @@ function completionFromResult(
   facts: HandProgressFacts,
 ): HandCompletion {
   if (result.type === 'draw') return { dealerTransition: 'stay', reason: 'draw' };
-  if (result.source === 'rob-bu-gang' || result.winners.length > 1) {
+  if (
+    result.source !== 'self-draw' &&
+    (result.source === 'rob-bu-gang' || result.winners.length > 1)
+  ) {
     return { dealerTransition: 'stay', reason: 'special-no-dealer-advance' };
   }
   if (facts.gangKaiCount > 0 || facts.packageSettlementCount > 0) {
     return { dealerTransition: 'stay', reason: 'special-no-dealer-advance' };
   }
-  if (result.winners[0]?.playerIndex === dealerIndex) {
+  const winnerPlayerIndex =
+    result.source === 'self-draw' ? result.winner.playerIndex : result.winners[0]?.playerIndex;
+  if (winnerPlayerIndex === dealerIndex) {
     return {
       dealerTransition: 'stay',
       reason: 'dealer-win',
@@ -406,13 +414,13 @@ function completionFromResult(
   const normalAdvance: HandCompletion = {
     dealerTransition: 'advance',
     reason: 'normal-dealer-advance',
-    completedBy: result.winners[0]?.playerIndex,
+    completedBy: winnerPlayerIndex,
   };
   return isFinalDealerTurn && hasFinalTurnContinuation(result, facts)
     ? {
         dealerTransition: 'stay',
         reason: 'final-turn-continuation',
-        completedBy: result.winners[0]?.playerIndex,
+        completedBy: winnerPlayerIndex,
       }
     : normalAdvance;
 }
@@ -420,7 +428,7 @@ function completionFromResult(
 function hasFinalTurnContinuation(result: HandResult, facts: HandProgressFacts): boolean {
   const hasBigHand =
     result.type === 'win' &&
-    result.winners.some(
+    (result.source === 'self-draw' ? [result.winner] : result.winners).some(
       (winner) =>
         winner.evaluation.patterns.length > 1 ||
         winner.evaluation.patterns.some((pattern) => pattern !== 'men-qing'),

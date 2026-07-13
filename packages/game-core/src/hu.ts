@@ -1,6 +1,6 @@
 import type { Meld } from './meld';
 import { FOUR_COPY_INDEXES, NUMBER_TILE_RANKS, NUMBER_TILE_SUITS, WIND_TILE_KINDS } from './state';
-import type { OrdinaryHandTile, OrdinaryTileFace } from './state';
+import type { OrdinaryHandTile, OrdinaryTileFace, SelfDrawSource } from './state';
 import type { HandResult, HuEvaluation, HuPattern, PendingHuScoringEvent } from './state';
 
 export interface HuStructureInput {
@@ -112,7 +112,7 @@ function isValidInput(input: HuStructureInput): boolean {
   return [...countFaces(allTiles).values()].every((count) => count <= 4);
 }
 
-function isValidMeld(meld: Meld): boolean {
+export function isValidMeld(meld: Meld): boolean {
   if (
     !meld ||
     typeof meld.id !== 'string' ||
@@ -175,6 +175,9 @@ const HU_PATTERNS: readonly HuPattern[] = [
   'dragon-seven-pairs',
   'no-flower',
   'pressure-absolute',
+  'tian-hu',
+  'hua-kai',
+  'gang-kai',
 ];
 
 export function isValidHuStructure(value: unknown): value is HuStructure {
@@ -244,7 +247,7 @@ export function isValidHuStructure(value: unknown): value is HuStructure {
 }
 
 export function isValidHuEvaluation(value: unknown): value is HuEvaluation {
-  return (
+  if (!(
     isRecord(value) &&
     isValidHuStructure(value.structure) &&
     isValidHuPatterns(value.patterns) &&
@@ -253,6 +256,11 @@ export function isValidHuEvaluation(value: unknown): value is HuEvaluation {
     value.amount === undefined &&
     value.multiplier === undefined &&
     value.isBiXiaHu === undefined
+  ))
+    return false;
+  return (
+    !value.patterns.includes('tian-hu') ||
+    (value.patterns.length === 1 && value.hardFlowerCount === 0 && value.softFlowerCount === 0)
   );
 }
 
@@ -265,24 +273,46 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
       value.winningTile === undefined &&
       value.payerPlayerIndex === undefined &&
       value.winners === undefined &&
+      value.winner === undefined &&
+      value.drawSource === undefined &&
+      value.formedFlowerKongDuringReplacement === undefined &&
       value.transfers === undefined
     );
   }
   if (
     value.type !== 'win' ||
     value.reason !== undefined ||
-    (value.source !== 'discard' && value.source !== 'rob-bu-gang') ||
     !isValidOrdinaryHandTile(value.winningTile) ||
-    !isPlayerIndex(value.payerPlayerIndex, playerCount) ||
-    !Array.isArray(value.winners) ||
-    value.winners.length === 0 ||
     value.transfers !== undefined ||
+    value.selfDrawProvenance !== undefined ||
     value.amount !== undefined ||
     value.multiplier !== undefined ||
     value.isBiXiaHu !== undefined
   ) {
     return false;
   }
+  if (value.source === 'self-draw') {
+    return (
+      value.payerPlayerIndex === undefined &&
+      value.winners === undefined &&
+      value.selfDrawProvenance === undefined &&
+      isRecord(value.winner) &&
+      isPlayerIndex(value.winner.playerIndex, playerCount) &&
+      isValidHuEvaluation(value.winner.evaluation) &&
+      value.winner.transfers === undefined &&
+      isValidSelfDrawSourceSummary(value)
+    );
+  }
+  if (
+    (value.source !== 'discard' && value.source !== 'rob-bu-gang') ||
+    value.winner !== undefined ||
+    value.drawSource !== undefined ||
+    value.formedFlowerKongDuringReplacement !== undefined ||
+    !isPlayerIndex(value.payerPlayerIndex, playerCount) ||
+    !Array.isArray(value.winners) ||
+    value.winners.length === 0
+  )
+    return false;
   const payerPlayerIndex = value.payerPlayerIndex;
   const indexes: number[] = [];
   for (const winner of value.winners) {
@@ -310,17 +340,50 @@ export function isValidPendingHuScoringEvent(
   value: unknown,
   playerCount: number,
 ): value is PendingHuScoringEvent {
+  if (
+    !isRecord(value) ||
+    value.type !== 'hu-resolved' ||
+    value.status !== 'pending' ||
+    !isPlayerIndex(value.winnerPlayerIndex, playerCount) ||
+    !isValidOrdinaryHandTile(value.winningTile) ||
+    !isValidHuEvaluation(value.evaluation)
+  )
+    return false;
+  if (value.source === 'self-draw') {
+    return (
+      value.payerPlayerIndex === undefined &&
+      value.winner === undefined &&
+      value.winners === undefined &&
+      value.amount === undefined &&
+      value.multiplier === undefined &&
+      isValidSelfDrawSourceSummary(value)
+    );
+  }
   return (
-    isRecord(value) &&
-    value.type === 'hu-resolved' &&
-    value.status === 'pending' &&
     (value.source === 'discard' || value.source === 'rob-bu-gang') &&
-    isPlayerIndex(value.winnerPlayerIndex, playerCount) &&
+    value.drawSource === undefined &&
+    value.formedFlowerKongDuringReplacement === undefined &&
+    value.winner === undefined &&
+    value.winners === undefined &&
     isPlayerIndex(value.payerPlayerIndex, playerCount) &&
-    value.winnerPlayerIndex !== value.payerPlayerIndex &&
-    isValidOrdinaryHandTile(value.winningTile) &&
-    isValidHuEvaluation(value.evaluation)
+    value.winnerPlayerIndex !== value.payerPlayerIndex
   );
+}
+
+const SELF_DRAW_SOURCES: readonly SelfDrawSource[] = [
+  'initial-dealer',
+  'wall-head',
+  'flower-replacement',
+  'ming-gang-tail',
+  'an-gang-tail',
+  'bu-gang-tail',
+];
+
+function isValidSelfDrawSourceSummary(value: Record<string, unknown>): boolean {
+  if (!SELF_DRAW_SOURCES.some((source) => source === value.drawSource)) return false;
+  return value.drawSource === 'flower-replacement'
+    ? typeof value.formedFlowerKongDuringReplacement === 'boolean'
+    : value.formedFlowerKongDuringReplacement === undefined;
 }
 
 function isValidHuPatterns(value: unknown): value is readonly HuPattern[] {
@@ -331,7 +394,10 @@ function isValidHuPatterns(value: unknown): value is readonly HuPattern[] {
     if (index < 0 || index <= previous) return false;
     previous = index;
   }
-  return true;
+  return (
+    !(value.includes('hua-kai') && value.includes('gang-kai')) &&
+    (!value.includes('tian-hu') || value.length === 1)
+  );
 }
 
 function isValidOrdinaryTileFace(value: unknown): value is OrdinaryTileFace {

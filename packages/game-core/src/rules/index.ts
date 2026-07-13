@@ -24,11 +24,14 @@ export function listRuleSets(): RuleSet[] {
 export { NANJING_OPEN_RULE_SET } from './nanjing-open';
 export type {
   AnGangScoringContext,
+  BuGangReactionAvailabilityContext,
   BuGangScoringContext,
+  DiscardReactionAvailabilityContext,
   FlowerKongScoringContext,
   HuEvaluationContext,
   HuScoringContext,
   MingGangScoringContext,
+  ReactionAvailabilityContext,
   RuleSet,
   RuleSetId,
 } from './RuleSet';
