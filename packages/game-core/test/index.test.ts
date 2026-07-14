@@ -864,6 +864,7 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
     },
     pendingScoringEvents: [],
     handProgressFacts: createGame().handProgressFacts,
+    specialDiscardTracking: createGame().specialDiscardTracking,
   };
 }
 
@@ -2403,6 +2404,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       },
       pendingScoringEvents,
       handProgressFacts: createGame().handProgressFacts,
+      specialDiscardTracking: createGame().specialDiscardTracking,
     };
     const action: GameAction = { type: 'DISCARD_TILE', tileId: discardedTile.id };
     const nextState = applyAction(state, action);
@@ -2478,6 +2480,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
+      specialDiscardTracking: createGame().specialDiscardTracking,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2592,6 +2595,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
+      specialDiscardTracking: createGame().specialDiscardTracking,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2638,6 +2642,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
+      specialDiscardTracking: createGame().specialDiscardTracking,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2684,6 +2689,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       reactionWindow,
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
+      specialDiscardTracking: createGame().specialDiscardTracking,
     };
 
     expect(
@@ -2777,6 +2783,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       },
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
+      specialDiscardTracking: createGame().specialDiscardTracking,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 

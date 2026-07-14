@@ -10,9 +10,11 @@ import type {
   FlowerTile,
   HuEvaluation,
   OrdinaryHandTile,
+  OrdinaryTileFace,
   SelfDrawSource,
   Tile,
 } from '../state';
+import type { WindTileKind } from '../state';
 
 export type RuleSetId = 'nanjing-open';
 
@@ -42,6 +44,27 @@ export interface BuGangScoringContext {
   readonly playerCount: number;
   readonly meldId: string;
 }
+
+export type SpecialDiscardScoringContext =
+  | {
+      readonly source: 'follow-discard';
+      readonly playerCount: number;
+      readonly payerPlayerIndex: number;
+      readonly triggeringPlayerIndex: number;
+      readonly tileFace: OrdinaryTileFace;
+    }
+  | {
+      readonly source: 'four-identical-discards';
+      readonly playerCount: number;
+      readonly payerPlayerIndex: number;
+      readonly tileFace: OrdinaryTileFace;
+    }
+  | {
+      readonly source: 'four-winds-gathered';
+      readonly playerCount: number;
+      readonly receiverPlayerIndex: number;
+      readonly completingWind: WindTileKind;
+    };
 
 interface ReactionAvailabilityContextBase {
   readonly playerCount: number;
@@ -124,6 +147,9 @@ export interface RuleSet {
   readonly getMingGangScoreTransfers: (context: MingGangScoringContext) => readonly ScoreTransfer[];
   readonly getAnGangScoreTransfers: (context: AnGangScoringContext) => readonly ScoreTransfer[];
   readonly getBuGangScoreTransfers: (context: BuGangScoringContext) => readonly ScoreTransfer[];
+  readonly getSpecialDiscardScoreTransfers: (
+    context: SpecialDiscardScoringContext,
+  ) => readonly ScoreTransfer[];
   readonly evaluateHu: (context: HuEvaluationContext) => HuEvaluation | null;
   readonly getHuScoreTransfers: (context: HuScoringContext) => readonly ScoreTransfer[];
   readonly getFlowerKongScoreTransfers: (

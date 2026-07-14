@@ -185,6 +185,60 @@ export interface ScoreTransfer {
   readonly amount: number;
 }
 
+export interface FollowDiscardState {
+  readonly initiatorPlayerIndex: number;
+  readonly tileFace: OrdinaryTileFace;
+  readonly expectedPlayerIndex: number;
+  readonly followerCount: number;
+}
+
+export interface WindDiscardSequence {
+  readonly playerIndex: number;
+  readonly winds: readonly WindTileKind[];
+}
+
+export interface SpecialDiscardTrackingState {
+  readonly followDiscard: FollowDiscardState | null;
+  readonly windSequences: readonly WindDiscardSequence[];
+}
+
+export type SpecialDiscardScoringSource =
+  'follow-discard' | 'four-identical-discards' | 'four-winds-gathered';
+
+export interface PendingFollowDiscardScoringEvent {
+  readonly type: 'special-discard';
+  readonly source: 'follow-discard';
+  readonly initiatorPlayerIndex: number;
+  readonly triggeringPlayerIndex: number;
+  readonly tileFace: OrdinaryTileFace;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+
+export interface PendingFourIdenticalDiscardsScoringEvent {
+  readonly type: 'special-discard';
+  readonly source: 'four-identical-discards';
+  readonly playerIndex: number;
+  readonly tileFace: OrdinaryTileFace;
+  readonly tileId: OrdinaryHandTile['id'];
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+
+export interface PendingFourWindsGatheredScoringEvent {
+  readonly type: 'special-discard';
+  readonly source: 'four-winds-gathered';
+  readonly playerIndex: number;
+  readonly completingWind: WindTileKind;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+
+export type PendingSpecialDiscardScoringEvent =
+  | PendingFollowDiscardScoringEvent
+  | PendingFourIdenticalDiscardsScoringEvent
+  | PendingFourWindsGatheredScoringEvent;
+
 export interface PendingFlowerKongScoringEvent {
   readonly type: 'flower-kong-created';
   readonly playerIndex: number;
@@ -301,7 +355,8 @@ export type PendingScoringEvent =
   | PendingMingGangScoringEvent
   | PendingAnGangScoringEvent
   | PendingHuScoringEvent
-  | PendingBuGangScoringEvent;
+  | PendingBuGangScoringEvent
+  | PendingSpecialDiscardScoringEvent;
 
 export interface DrawHandResult {
   readonly type: 'draw';
@@ -366,6 +421,7 @@ export interface GameState {
   reactionWindow?: ReactionWindow;
   pendingScoringEvents: readonly PendingScoringEvent[];
   handProgressFacts: HandProgressFacts;
+  specialDiscardTracking: SpecialDiscardTrackingState;
   selfDrawProvenance?: SelfDrawProvenance;
   result?: HandResult;
 }

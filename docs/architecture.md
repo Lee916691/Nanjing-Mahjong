@@ -280,3 +280,14 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - `SelfDrawWinHandResult` 只有一个 `winner`，不伪造 `payerPlayerIndex` 或 `winners` 数组。一个 `PendingSelfDrawHuScoringEvent` 保存 RuleSet 生成的全部付款 transfers；普通自摸由三家分别付款，天胡由三家各付1000。Settlement 仍只验证并执行 transfer 快照，不理解自摸公式或重建付款人。
 - 自摸 action 原子结束本局、清除 provenance、更新 `selfDrawCount`，杠开时同时更新 `gangKaiCount`。Match 在同一次 action 中结算事件；`completeCurrentHand` 从 typed result 与局内 facts 处理庄家自摸、闲家过庄、杠开不过庄和第16有效庄家轮次的任意自摸续庄。
 - 摸到牌墙最后一张普通牌后，本局继续保持 `waiting-for-discard`，玩家可以自摸或弃牌。若弃牌则正常开放响应窗口；无人响应且牌墙为空后流局。补花链耗尽仍立即流局，最后一张终局花的花杠事件仍被抑制。
+
+## 14. 三项特殊弃牌实时结算边界
+
+- 跟打一圈、同一玩家打出四张相同牌和四风归齐都由合法 `DISCARD_TILE` 自动检测，不新增声明 action、响应类型或客户端计分输入。
+- Reducer 在 `GameState.specialDiscardTracking` 中只保存当前跟打候选和四名玩家各自尚未完成的风牌集合。新手牌统一重置；非法 action、损坏 tracking 和已经结束的手牌不会推进这些状态。
+- 跟打候选保存发起玩家、目标普通牌面、预期下一名玩家和已跟人数。只有正式解析成立且实际跳过正常下一家的 Peng / MingGang 才取消候选；expected player 的 Peng / MingGang、AnGang、BuGang、补花和全 Pass 不取消。
+- 四张相同弃牌直接复用玩家不可删除的 `DiscardRecord` 历史，以同一牌面、四个合法且互异的实体 ID 和本次新追加的第四张记录为触发依据；被 Peng / MingGang 标记领取的旧弃牌仍参与统计。
+- 每项触发都通过一个 source-discriminated `RuleSet.getSpecialDiscardScoreTransfers` context 生成新的不可变 `ScoreTransfer[]` 快照。RuleSet 只接收玩家索引、牌面或完成风等最小只读事实，不接收 GameState、MatchState 或客户端金额。
+- 同一弃牌触发多项规则时，pending event 按规则章节稳定追加：跟打一圈、四张相同、四风归齐。Match settlement 仍只校验 typed metadata 并通用执行 transfers，不识别玩法公式、不调用 RuleSet、不重算金额。
+- 三项事件在弃牌成立时实时生成并由同一次 Match action 结算；之后的 Hu 或全 Pass 流局不会撤销已经产生的转账。对应 `HandProgressFacts` 与事件原子递增，并参与第16有效庄次额外续庄判断。
+- 本阶段未实现地胡、杠后承包或任何包子规则。

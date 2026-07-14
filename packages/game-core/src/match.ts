@@ -6,6 +6,7 @@ import type { Seat } from './player';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
 import type { RuleSetId } from './rules';
 import type { GameState, HandProgressFacts, HandResult } from './state';
+import { NUMBER_TILE_RANKS, NUMBER_TILE_SUITS, WIND_TILE_KINDS } from './state';
 
 const FLOWER_KONG_KINDS = new Set([
   'red-center',
@@ -257,6 +258,10 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
       ) {
         throw settlementError(`event ${eventIndex} createdDuring is invalid`);
       }
+    } else if (candidate.type === 'special-discard') {
+      if (!isValidPendingSpecialDiscardScoringEvent(candidate, players.length)) {
+        throw settlementError(`event ${eventIndex} special discard metadata is invalid`);
+      }
     } else {
       throw settlementError(`event ${eventIndex} type is invalid`);
     }
@@ -310,6 +315,76 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
     cumulativeScores,
     currentHand: { ...match.currentHand, pendingScoringEvents: [] },
   };
+}
+
+function isValidPendingSpecialDiscardScoringEvent(
+  value: Record<string, unknown>,
+  playerCount: number,
+): boolean {
+  const common = ['type', 'source', 'transfers', 'status'];
+  if (value.status !== 'pending' || value.amount !== undefined) return false;
+  if (value.source === 'follow-discard') {
+    return (
+      hasExactKeys(value, [
+        ...common,
+        'initiatorPlayerIndex',
+        'triggeringPlayerIndex',
+        'tileFace',
+      ]) &&
+      isPlayerIndexValue(value.initiatorPlayerIndex, playerCount) &&
+      isPlayerIndexValue(value.triggeringPlayerIndex, playerCount) &&
+      value.initiatorPlayerIndex !== value.triggeringPlayerIndex &&
+      isValidOrdinaryTileFace(value.tileFace)
+    );
+  }
+  if (value.source === 'four-identical-discards') {
+    return (
+      hasExactKeys(value, [...common, 'playerIndex', 'tileFace', 'tileId']) &&
+      isPlayerIndexValue(value.playerIndex, playerCount) &&
+      isValidOrdinaryTileFace(value.tileFace) &&
+      isTileIdForFace(value.tileId, value.tileFace)
+    );
+  }
+  return (
+    value.source === 'four-winds-gathered' &&
+    hasExactKeys(value, [...common, 'playerIndex', 'completingWind']) &&
+    isPlayerIndexValue(value.playerIndex, playerCount) &&
+    WIND_TILE_KINDS.some((wind) => wind === value.completingWind)
+  );
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function isPlayerIndexValue(value: unknown, playerCount: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < playerCount;
+}
+
+function isValidOrdinaryTileFace(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  if (value.category === 'number') {
+    return (
+      hasExactKeys(value, ['category', 'suit', 'rank']) &&
+      NUMBER_TILE_SUITS.some((suit) => suit === value.suit) &&
+      NUMBER_TILE_RANKS.some((rank) => rank === value.rank)
+    );
+  }
+  return (
+    value.category === 'wind' &&
+    hasExactKeys(value, ['category', 'wind']) &&
+    WIND_TILE_KINDS.some((wind) => wind === value.wind)
+  );
+}
+
+function isTileIdForFace(value: unknown, face: Record<string, unknown>): boolean {
+  if (typeof value !== 'string') return false;
+  const prefix =
+    face.category === 'number'
+      ? `${String(face.suit)}-${String(face.rank)}`
+      : `wind-${String(face.wind)}`;
+  return [1, 2, 3, 4].some((copy) => value === `${prefix}-${copy}`);
 }
 
 export function completeCurrentHand(match: MatchState): MatchState {

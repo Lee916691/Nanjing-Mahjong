@@ -40,13 +40,16 @@ import type {
   OrdinaryHandTile,
   PendingAction,
   PendingScoringEvent,
+  PendingSpecialDiscardScoringEvent,
   ReactionResponse,
   ReactionWindow,
   ScoringEventCreationStage,
+  ScoreTransfer,
   SinglePlayerFlowerReplacementInput,
   SinglePlayerFlowerReplacementResult,
   SelfDrawProvenance,
   SelfDrawSource,
+  SpecialDiscardTrackingState,
   TileWall,
   WindTile,
 } from './state';
@@ -190,6 +193,10 @@ export function declareSelfDrawHuReducer(
       gangKaiCount:
         state.handProgressFacts.gangKaiCount +
         (candidate.evaluation.patterns.includes('gang-kai') ? 1 : 0),
+    },
+    specialDiscardTracking: {
+      ...state.specialDiscardTracking,
+      followDiscard: null,
     },
     result: {
       type: 'win',
@@ -474,6 +481,7 @@ export function drawReducer(state: GameState): GameState {
       state.pendingScoringEvents,
       pendingScoringEvents,
     ),
+    specialDiscardTracking: state.specialDiscardTracking,
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
@@ -488,6 +496,16 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
 
   if (!currentPlayer) {
     throw new Error(`Invalid current player index ${state.currentPlayerIndex}`);
+  }
+
+  if (
+    !isValidSpecialDiscardTracking(state.specialDiscardTracking, state.players.length) ||
+    !isNonNegativeInteger(state.handProgressFacts.followDiscardPenaltyCount) ||
+    !isNonNegativeInteger(state.handProgressFacts.fourIdenticalDiscardsPenaltyCount) ||
+    !isNonNegativeInteger(state.handProgressFacts.fourWindsGatheredCount) ||
+    !hasValidDiscardRecords(currentPlayer)
+  ) {
+    return state;
   }
 
   const discardedTileIndex = currentPlayer.hand.findIndex((tile) => tile.id === action.tileId);
@@ -521,6 +539,14 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
       (provenance) => provenance.tileId !== discardedTile.id,
     ),
   };
+
+  const specialDiscardUpdate = updateSpecialDiscardRules(
+    state,
+    players,
+    state.currentPlayerIndex,
+    discardedTile,
+  );
+  if (!specialDiscardUpdate) return state;
 
   const reactionWindowShell = createReactionWindow(
     players,
@@ -574,8 +600,9 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     pendingAction,
     lastDiscard,
     reactionWindow,
-    pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
-    handProgressFacts: state.handProgressFacts,
+    pendingScoringEvents: [...(state.pendingScoringEvents ?? []), ...specialDiscardUpdate.events],
+    handProgressFacts: specialDiscardUpdate.handProgressFacts,
+    specialDiscardTracking: specialDiscardUpdate.tracking,
     selfDrawProvenance: undefined,
   };
 }
@@ -897,6 +924,7 @@ function resolveMingGang(
       scoringEvents,
       pendingScoringEvents,
     ),
+    specialDiscardTracking: trackingAfterSeatClaim(state, playerIndex),
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
@@ -999,6 +1027,7 @@ function resolvePeng(
     reactionWindow: { ...window, status: 'closed' },
     nextMeldSequence: state.nextMeldSequence + 1,
     selfDrawProvenance: undefined,
+    specialDiscardTracking: trackingAfterSeatClaim(state, pengPlayerIndex),
   };
 }
 
@@ -1091,6 +1120,10 @@ function resolveHu(
     reactionWindow: { ...window, status: 'closed' },
     pendingScoringEvents,
     selfDrawProvenance: undefined,
+    specialDiscardTracking: {
+      ...state.specialDiscardTracking,
+      followDiscard: null,
+    },
     result: {
       type: 'win',
       source,
@@ -1253,6 +1286,7 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
     pendingAction: createPendingAction(players, dealerIndex, 'draw'),
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
+    specialDiscardTracking: createEmptySpecialDiscardTracking(),
   };
 }
 
@@ -1281,6 +1315,7 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     pendingAction: createPendingAction(players, dealerIndex, 'discard'),
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
+    specialDiscardTracking: createEmptySpecialDiscardTracking(),
   });
 }
 
@@ -1426,6 +1461,7 @@ function finishInitialDealFromRawHands(
     pendingAction: createPendingAction(nextPlayers, state.dealerIndex, 'discard'),
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
+    specialDiscardTracking: createEmptySpecialDiscardTracking(),
   };
 
   return phase === 'ended' ? markHandEnded(nextState) : nextState;
@@ -1557,6 +1593,254 @@ function createEmptyHandProgressFacts(): HandProgressFacts {
     fourIdenticalDiscardsPenaltyCount: 0,
     fourWindsGatheredCount: 0,
   };
+}
+
+function createEmptySpecialDiscardTracking(): SpecialDiscardTrackingState {
+  return {
+    followDiscard: null,
+    windSequences: SEATS.map((_, playerIndex) => ({ playerIndex, winds: [] })),
+  };
+}
+
+interface SpecialDiscardUpdate {
+  readonly tracking: SpecialDiscardTrackingState;
+  readonly events: readonly PendingSpecialDiscardScoringEvent[];
+  readonly handProgressFacts: HandProgressFacts;
+}
+
+function updateSpecialDiscardRules(
+  state: GameState,
+  players: readonly PlayerState[],
+  playerIndex: number,
+  discardedTile: OrdinaryHandTile,
+): SpecialDiscardUpdate | null {
+  const tileFace = ordinaryTileFace(discardedTile);
+  const follow = state.specialDiscardTracking.followDiscard;
+  let nextFollow = follow;
+  let followEvent: PendingSpecialDiscardScoringEvent | null = null;
+  if (follow === null || follow.expectedPlayerIndex !== playerIndex) {
+    nextFollow = {
+      initiatorPlayerIndex: playerIndex,
+      tileFace,
+      expectedPlayerIndex: nextPlayerIndex(playerIndex),
+      followerCount: 0,
+    };
+  } else if (!isSameOrdinaryTileFaceValue(follow.tileFace, tileFace)) {
+    nextFollow = {
+      initiatorPlayerIndex: playerIndex,
+      tileFace,
+      expectedPlayerIndex: nextPlayerIndex(playerIndex),
+      followerCount: 0,
+    };
+  } else if (follow.followerCount === 2) {
+    const transfers = getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
+      source: 'follow-discard',
+      playerCount: players.length,
+      payerPlayerIndex: follow.initiatorPlayerIndex,
+      triggeringPlayerIndex: playerIndex,
+      tileFace,
+    });
+    if (!isValidGeneratedTransfers(transfers, players.length)) return null;
+    followEvent = {
+      type: 'special-discard',
+      source: 'follow-discard',
+      initiatorPlayerIndex: follow.initiatorPlayerIndex,
+      triggeringPlayerIndex: playerIndex,
+      tileFace,
+      transfers: transfers.map((transfer) => ({ ...transfer })),
+      status: 'pending',
+    };
+    nextFollow = null;
+  } else {
+    nextFollow = {
+      ...follow,
+      expectedPlayerIndex: nextPlayerIndex(playerIndex),
+      followerCount: follow.followerCount + 1,
+    };
+  }
+
+  const player = players[playerIndex];
+  if (!player || !hasValidDiscardRecords(player)) return null;
+  const matchingDiscards = player.discardPile.filter((record) =>
+    isSameOrdinaryTileFace(record.tile, discardedTile),
+  );
+  let identicalEvent: PendingSpecialDiscardScoringEvent | null = null;
+  if (
+    matchingDiscards.length === 4 &&
+    new Set(matchingDiscards.map((record) => record.tile.id)).size === 4 &&
+    matchingDiscards.at(-1)?.tile.id === discardedTile.id
+  ) {
+    const transfers = getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
+      source: 'four-identical-discards',
+      playerCount: players.length,
+      payerPlayerIndex: playerIndex,
+      tileFace,
+    });
+    if (!isValidGeneratedTransfers(transfers, players.length)) return null;
+    identicalEvent = {
+      type: 'special-discard',
+      source: 'four-identical-discards',
+      playerIndex,
+      tileFace,
+      tileId: discardedTile.id,
+      transfers: transfers.map((transfer) => ({ ...transfer })),
+      status: 'pending',
+    };
+  }
+
+  const windSequences = state.specialDiscardTracking.windSequences.map((sequence) => ({
+    ...sequence,
+    winds: [...sequence.winds],
+  }));
+  const sequence = windSequences[playerIndex];
+  if (!sequence) return null;
+  let winds = discardedTile.category === 'wind' ? [...sequence.winds] : [];
+  let windEvent: PendingSpecialDiscardScoringEvent | null = null;
+  if (discardedTile.category === 'wind') {
+    if (!winds.includes(discardedTile.wind)) winds.push(discardedTile.wind);
+    if (winds.length === WIND_TILE_KINDS.length) {
+      const transfers = getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
+        source: 'four-winds-gathered',
+        playerCount: players.length,
+        receiverPlayerIndex: playerIndex,
+        completingWind: discardedTile.wind,
+      });
+      if (!isValidGeneratedTransfers(transfers, players.length)) return null;
+      windEvent = {
+        type: 'special-discard',
+        source: 'four-winds-gathered',
+        playerIndex,
+        completingWind: discardedTile.wind,
+        transfers: transfers.map((transfer) => ({ ...transfer })),
+        status: 'pending',
+      };
+      winds = [];
+    }
+  }
+  windSequences[playerIndex] = { playerIndex, winds };
+  const events = [followEvent, identicalEvent, windEvent].filter(
+    (event): event is PendingSpecialDiscardScoringEvent => event !== null,
+  );
+  return {
+    tracking: { followDiscard: nextFollow, windSequences },
+    events,
+    handProgressFacts: {
+      ...state.handProgressFacts,
+      followDiscardPenaltyCount:
+        state.handProgressFacts.followDiscardPenaltyCount + (followEvent ? 1 : 0),
+      fourIdenticalDiscardsPenaltyCount:
+        state.handProgressFacts.fourIdenticalDiscardsPenaltyCount + (identicalEvent ? 1 : 0),
+      fourWindsGatheredCount: state.handProgressFacts.fourWindsGatheredCount + (windEvent ? 1 : 0),
+    },
+  };
+}
+
+function trackingAfterSeatClaim(state: GameState, claimantPlayerIndex: number) {
+  const follow = state.specialDiscardTracking.followDiscard;
+  return follow === null || follow.expectedPlayerIndex === claimantPlayerIndex
+    ? state.specialDiscardTracking
+    : { ...state.specialDiscardTracking, followDiscard: null };
+}
+
+function isValidGeneratedTransfers(
+  transfers: readonly ScoreTransfer[],
+  playerCount: number,
+): boolean {
+  return (
+    Array.isArray(transfers) &&
+    transfers.length === playerCount - 1 &&
+    transfers.every(
+      (transfer) =>
+        Number.isInteger(transfer.fromPlayerIndex) &&
+        transfer.fromPlayerIndex >= 0 &&
+        transfer.fromPlayerIndex < playerCount &&
+        Number.isInteger(transfer.toPlayerIndex) &&
+        transfer.toPlayerIndex >= 0 &&
+        transfer.toPlayerIndex < playerCount &&
+        transfer.fromPlayerIndex !== transfer.toPlayerIndex &&
+        Number.isInteger(transfer.amount) &&
+        transfer.amount > 0,
+    )
+  );
+}
+
+function hasValidDiscardRecords(player: PlayerState): boolean {
+  if (!Array.isArray(player.discardPile)) return false;
+  const ids: string[] = [];
+  const faceCounts = new Map<string, number>();
+  for (const record of player.discardPile) {
+    if (
+      !isRecord(record) ||
+      !isValidOrdinaryTile(record.tile) ||
+      (record.claimedByMeldId !== undefined &&
+        (typeof record.claimedByMeldId !== 'string' || record.claimedByMeldId.trim().length === 0))
+    )
+      return false;
+    ids.push(record.tile.id);
+    const key = ordinaryTileFaceKeyValue(ordinaryTileFace(record.tile));
+    faceCounts.set(key, (faceCounts.get(key) ?? 0) + 1);
+  }
+  return new Set(ids).size === ids.length && [...faceCounts.values()].every((count) => count <= 4);
+}
+
+function isValidSpecialDiscardTracking(
+  value: unknown,
+  playerCount: number,
+): value is SpecialDiscardTrackingState {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ['followDiscard', 'windSequences']) ||
+    !Array.isArray(value.windSequences) ||
+    value.windSequences.length !== playerCount
+  )
+    return false;
+  if (value.followDiscard !== null) {
+    const follow = value.followDiscard;
+    if (
+      !isRecord(follow) ||
+      !hasOnlyKeys(follow, [
+        'initiatorPlayerIndex',
+        'tileFace',
+        'expectedPlayerIndex',
+        'followerCount',
+      ]) ||
+      !isPlayerIndexValue(follow.initiatorPlayerIndex, playerCount) ||
+      !isPlayerIndexValue(follow.expectedPlayerIndex, playerCount) ||
+      follow.initiatorPlayerIndex === follow.expectedPlayerIndex ||
+      !isValidOrdinaryTileFace(follow.tileFace) ||
+      !isNonNegativeInteger(follow.followerCount) ||
+      follow.followerCount > 2
+    )
+      return false;
+    if (
+      follow.expectedPlayerIndex !==
+      (follow.initiatorPlayerIndex + follow.followerCount + 1) % playerCount
+    )
+      return false;
+  }
+  return value.windSequences.every((candidate, playerIndex) => {
+    if (
+      !isRecord(candidate) ||
+      !hasOnlyKeys(candidate, ['playerIndex', 'winds']) ||
+      candidate.playerIndex !== playerIndex ||
+      !Array.isArray(candidate.winds) ||
+      candidate.winds.length > 3 ||
+      !candidate.winds.every((wind) =>
+        WIND_TILE_KINDS.some((candidateWind) => candidateWind === wind),
+      )
+    )
+      return false;
+    return new Set(candidate.winds).size === candidate.winds.length;
+  });
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function isPlayerIndexValue(value: unknown, playerCount: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < playerCount;
 }
 
 function addFlowerKongFacts(
@@ -1726,6 +2010,19 @@ function copyGameState(state: GameState): GameState {
       : { reactionWindow: copyReactionWindow(state.reactionWindow) }),
     pendingScoringEvents: [...(state.pendingScoringEvents ?? [])],
     handProgressFacts: { ...state.handProgressFacts },
+    specialDiscardTracking: {
+      followDiscard:
+        state.specialDiscardTracking.followDiscard === null
+          ? null
+          : {
+              ...state.specialDiscardTracking.followDiscard,
+              tileFace: { ...state.specialDiscardTracking.followDiscard.tileFace },
+            },
+      windSequences: state.specialDiscardTracking.windSequences.map((sequence) => ({
+        ...sequence,
+        winds: [...sequence.winds],
+      })),
+    },
     ...(state.selfDrawProvenance === undefined
       ? {}
       : { selfDrawProvenance: { ...state.selfDrawProvenance } }),
@@ -2282,11 +2579,16 @@ function isValidOrdinaryTileFace(tileFace: unknown): tileFace is OrdinaryTileFac
   if (!isRecord(tileFace)) return false;
   if (tileFace.category === 'number') {
     return (
+      hasOnlyKeys(tileFace, ['category', 'suit', 'rank']) &&
       NUMBER_TILE_SUITS.some((suit) => suit === tileFace.suit) &&
       NUMBER_TILE_RANKS.some((rank) => rank === tileFace.rank)
     );
   }
-  return tileFace.category === 'wind' && WIND_TILE_KINDS.some((wind) => wind === tileFace.wind);
+  return (
+    tileFace.category === 'wind' &&
+    hasOnlyKeys(tileFace, ['category', 'wind']) &&
+    WIND_TILE_KINDS.some((wind) => wind === tileFace.wind)
+  );
 }
 
 function isValidOrdinaryTile(tile: unknown): tile is OrdinaryHandTile {

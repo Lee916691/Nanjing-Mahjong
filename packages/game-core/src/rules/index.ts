@@ -32,6 +32,7 @@ export type {
   HuScoringContext,
   MingGangScoringContext,
   ReactionAvailabilityContext,
+  SpecialDiscardScoringContext,
   RuleSet,
   RuleSetId,
 } from './RuleSet';

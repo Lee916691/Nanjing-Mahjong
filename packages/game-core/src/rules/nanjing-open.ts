@@ -15,7 +15,12 @@ import type {
   OrdinaryTileFace,
   ReactionAvailability,
 } from '../state';
-import type { HuEvaluationContext, ReactionAvailabilityContext, RuleSet } from './RuleSet';
+import type {
+  HuEvaluationContext,
+  ReactionAvailabilityContext,
+  RuleSet,
+  SpecialDiscardScoringContext,
+} from './RuleSet';
 
 const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
   'men-qing': 10,
@@ -51,6 +56,7 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
   getBuGangScoreTransfers: ({ playerIndex, payerPlayerIndex }) => [
     { fromPlayerIndex: payerPlayerIndex, toPlayerIndex: playerIndex, amount: 20 },
   ],
+  getSpecialDiscardScoreTransfers: getSpecialDiscardScoreTransfers,
   evaluateHu: evaluateNanjingOpenHu,
   getHuScoreTransfers: (context) => {
     const { source, winnerPlayerIndex, evaluation } = context;
@@ -87,6 +93,75 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
       amount: 20,
     })),
 };
+
+function getSpecialDiscardScoreTransfers(context: unknown) {
+  if (!isValidSpecialDiscardScoringContext(context)) return [];
+  if (context.source === 'four-winds-gathered') {
+    return otherPlayers(context.receiverPlayerIndex, context.playerCount).map(
+      (payerPlayerIndex) => ({
+        fromPlayerIndex: payerPlayerIndex,
+        toPlayerIndex: context.receiverPlayerIndex,
+        amount: 10,
+      }),
+    );
+  }
+  return otherPlayers(context.payerPlayerIndex, context.playerCount).map((receiverPlayerIndex) => ({
+    fromPlayerIndex: context.payerPlayerIndex,
+    toPlayerIndex: receiverPlayerIndex,
+    amount: 10,
+  }));
+}
+
+function isValidSpecialDiscardScoringContext(
+  value: unknown,
+): value is SpecialDiscardScoringContext {
+  if (!isRecord(value) || value.playerCount !== 4) return false;
+  if (value.source === 'four-winds-gathered') {
+    return (
+      hasOnlyKeys(value, ['source', 'playerCount', 'receiverPlayerIndex', 'completingWind']) &&
+      isPlayerIndex(value.receiverPlayerIndex) &&
+      WIND_TILE_KINDS.some((wind) => wind === value.completingWind)
+    );
+  }
+  if (value.source !== 'follow-discard' && value.source !== 'four-identical-discards') return false;
+  if (!isPlayerIndex(value.payerPlayerIndex) || !isValidOrdinaryTileFaceValue(value.tileFace))
+    return false;
+  return value.source === 'four-identical-discards'
+    ? hasOnlyKeys(value, ['source', 'playerCount', 'payerPlayerIndex', 'tileFace'])
+    : hasOnlyKeys(value, [
+        'source',
+        'playerCount',
+        'payerPlayerIndex',
+        'triggeringPlayerIndex',
+        'tileFace',
+      ]) &&
+        isPlayerIndex(value.triggeringPlayerIndex) &&
+        value.triggeringPlayerIndex !== value.payerPlayerIndex;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isPlayerIndex(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 4;
+}
+
+function isValidOrdinaryTileFaceValue(value: unknown): value is OrdinaryTileFace {
+  if (!isRecord(value)) return false;
+  return value.category === 'number'
+    ? hasOnlyKeys(value, ['category', 'suit', 'rank']) &&
+        NUMBER_TILE_SUITS.some((suit) => suit === value.suit) &&
+        NUMBER_TILE_RANKS.some((rank) => rank === value.rank)
+    : value.category === 'wind' &&
+        hasOnlyKeys(value, ['category', 'wind']) &&
+        WIND_TILE_KINDS.some((wind) => wind === value.wind);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
 
 function getNanjingOpenAvailableReactions(
   context: ReactionAvailabilityContext,
