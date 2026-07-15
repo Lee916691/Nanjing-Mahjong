@@ -238,6 +238,12 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
       if (!isValidPendingHuScoringEvent(candidate, players.length)) {
         throw settlementError(`event ${eventIndex} Hu metadata is invalid`);
       }
+      if (
+        candidate.winnerPlayerIndex === match.dealerIndex &&
+        candidate.evaluation.patterns.includes('di-hu')
+      ) {
+        throw settlementError(`event ${eventIndex} dealer cannot have Di Hu`);
+      }
       const winner = validPlayerIndex(candidate.winnerPlayerIndex, players.length, eventIndex);
       if (huEvent.source !== 'self-draw') {
         const payer = validPlayerIndex(huEvent.payerPlayerIndex, players.length, eventIndex);
@@ -399,6 +405,7 @@ export function completeCurrentHand(match: MatchState): MatchState {
   if (
     match.currentHand.phase !== 'ended' ||
     !isValidHandResult(match.currentHand.result, match.currentHand.players.length) ||
+    !isValidDiHuWinners(match.currentHand.result, match.dealerIndex) ||
     !isValidHandProgressFacts(match.currentHand.handProgressFacts)
   ) {
     throw new Error('Current hand must be ended with a valid result before it can complete');
@@ -406,7 +413,11 @@ export function completeCurrentHand(match: MatchState): MatchState {
 
   const settledMatch = settlePendingScoringEvents(match);
   const result = settledMatch.currentHand.result;
-  if (!result || !isValidHandResult(result, settledMatch.currentHand.players.length)) {
+  if (
+    !result ||
+    !isValidHandResult(result, settledMatch.currentHand.players.length) ||
+    !isValidDiHuWinners(result, match.dealerIndex)
+  ) {
     throw new Error('Current hand result became invalid during settlement');
   }
   const completion = completionFromResult(
@@ -459,6 +470,14 @@ export function completeCurrentHand(match: MatchState): MatchState {
     completedHands: [...match.completedHands, summary],
     isFinalDealerTurn: nextEffectiveDealerTurn === match.totalEffectiveDealerTurns,
   };
+}
+
+function isValidDiHuWinners(result: HandResult, dealerIndex: number): boolean {
+  if (result.type !== 'win') return true;
+  const winners = result.source === 'self-draw' ? [result.winner] : result.winners;
+  return winners.every(
+    (winner) => winner.playerIndex !== dealerIndex || !winner.evaluation.patterns.includes('di-hu'),
+  );
 }
 
 function completionFromResult(

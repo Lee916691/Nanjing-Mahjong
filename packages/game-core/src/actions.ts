@@ -33,6 +33,12 @@ export type DeclareSelfDrawHuAction = {
   type: 'DECLARE_SELF_DRAW_HU';
   playerIndex: number;
 };
+export type DiHuDecision = 'declare' | 'pass';
+export type SubmitDiHuDecisionAction = {
+  type: 'SUBMIT_DI_HU_DECISION';
+  playerIndex: number;
+  decision: DiHuDecision;
+};
 export type ClaimReactionAction = { type: 'PENG' } | { type: 'GANG' } | { type: 'HU' };
 export type ReactionAction = SubmitReactionAction | PassReactionAction | ClaimReactionAction;
 export type GameAction =
@@ -43,4 +49,5 @@ export type GameAction =
   | ResolveReactionWindowAction
   | DeclareAnGangAction
   | DeclareBuGangAction
-  | DeclareSelfDrawHuAction;
+  | DeclareSelfDrawHuAction
+  | SubmitDiHuDecisionAction;

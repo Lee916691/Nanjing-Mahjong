@@ -271,7 +271,7 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 
 ## 13. 当前可达状态下的自摸闭环
 
-- Phase 13A 只完成当前 action 和状态可以到达的自摸闭环，不代表规则文档中的全部自摸变体均已实现。地胡报听、杠后承包和其他包子付款重定向仍留待后续阶段，当前也不实现 UI、server 或 timer。
+- Phase 13A 建立的自摸闭环已由 Phase 14A 扩展到地胡；杠后承包和其他包子付款重定向仍留待后续阶段，当前也不实现 UI、server 或 timer。
 - `GameState` 同一时间最多保存一份 `SelfDrawProvenance`。它绑定当前候选玩家、具体普通牌实体 ID 和 `initial-dealer`、`wall-head`、`flower-replacement`、`ming-gang-tail`、`an-gang-tail`、`bu-gang-tail` 之一，不保存摸牌历史，也不复用补杠来源证明。
 - 初始庄家来源在完整发牌与初始补花结束后建立。无初始补花时绑定庄家发牌过程中最后取得的普通牌；有初始补花时绑定庄家补花流程最终补入的普通牌。该来源只用于首次弃牌前的天胡候选。
 - 普通墙头或杠尾直接取得普通牌时记录直接来源。只要先取得花牌，最终普通牌就记录为 `flower-replacement`；该 variant 同时记录本次真实补花链是否新创建了未去重、未被终局抑制的 flower-kong event。
@@ -290,4 +290,13 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - 每项触发都通过一个 source-discriminated `RuleSet.getSpecialDiscardScoreTransfers` context 生成新的不可变 `ScoreTransfer[]` 快照。RuleSet 只接收玩家索引、牌面或完成风等最小只读事实，不接收 GameState、MatchState 或客户端金额。
 - 同一弃牌触发多项规则时，pending event 按规则章节稳定追加：跟打一圈、四张相同、四风归齐。Match settlement 仍只校验 typed metadata 并通用执行 transfers，不识别玩法公式、不调用 RuleSet、不重算金额。
 - 三项事件在弃牌成立时实时生成并由同一次 Match action 结算；之后的 Hu 或全 Pass 流局不会撤销已经产生的转账。对应 `HandProgressFacts` 与事件原子递增，并参与第16有效庄次额外续庄判断。
-- 本阶段未实现地胡、杠后承包或任何包子规则。
+- 本阶段未实现杠后承包或任何包子规则。
+
+## 15. 听牌纯查询与地胡报听边界
+
+- `getWinningTileFaces` 是无状态、无副作用的 31 个普通牌面听牌查询。输入只包含暗手与已有 Meld；合法非听返回空数组，损坏实体、重复 ID、非法数量或 Meld 返回 `null`。内部候选牌实体只在函数局部构造，不进入 `GameState`、事件或任何客户端视图。
+- 初始发牌和所有玩家初始补花完成后，Reducer 为三名闲家计算资格。仅听牌者按庄家下家起的座次进入 `di-hu-decision` 队列；全部决定完成前庄家仍是当前主动玩家，但不能出牌或天胡。决定 Action 只提交 `declare` 或 `pass`，听牌面快照始终由服务端从权威手牌重算。
+- 完整 `GameState.diHuDeclarations` 中的声明与 `winningTileFaces` 是服务端内部裁判状态。未来安全视图只能公开已经声明的玩家；未听者、pass 玩家和任何 wait faces 都必须隐藏。当前阶段不实现 server 安全视图，也不把 `eligiblePlayerIndices` 或 `passedPlayerIndices` 持久化。
+- 报听玩家只能弃 `SelfDrawProvenance` 指向的当前具体实体；声明在合法摸切、过手胡和合法等听口杠后保留。Peng 与 BuGang 禁止；MingGang 和 AnGang 必须以杠后重新计算的听牌面与声明快照完全相等为条件，并在 availability 与 action 解析时双重校验。
+- 地胡沿用 `discard`、`self-draw`、`rob-bu-gang` 三种既有胡牌来源，只作为稳定排序的 `HuPattern`。Reducer 向 RuleSet 传入当前赢家的最小声明摘要和庄家索引；RuleSet 验证赢家非庄家、和牌面命中快照后加 30 单份分，再沿用敞开头倍数与既有付款拓扑。天胡与地胡互斥。
+- 声明 Action 不产生 scoring event。胡牌继续生成携带最终 transfers 的 `hu-resolved` 事件，通用 Match settlement 不重算地胡金额；Match 仅在事务边界拒绝庄家伪造的地胡 metadata。`prepareNextHand` 通过新一轮发牌重新创建决定状态，不继承上一手队列、声明或听牌面。

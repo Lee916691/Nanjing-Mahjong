@@ -8,6 +8,7 @@ import type {
   ScoreTransfer,
   ScoringEventCreationStage,
   FlowerTile,
+  DiHuDeclaration,
   HuEvaluation,
   OrdinaryHandTile,
   OrdinaryTileFace,
@@ -75,6 +76,8 @@ interface ReactionAvailabilityContextBase {
   readonly responderFlowers: readonly FlowerTile[];
   readonly responderPassHu: boolean;
   readonly allMelds: readonly Meld[];
+  readonly dealerIndex?: number;
+  readonly responderDiHuDeclaration?: DiHuDeclaration;
 }
 
 export interface DiscardReactionAvailabilityContext extends ReactionAvailabilityContextBase {
@@ -101,6 +104,8 @@ interface HuContextBase {
   readonly melds: readonly Meld[];
   readonly flowers: readonly FlowerTile[];
   readonly allMelds: readonly Meld[];
+  readonly dealerIndex?: number;
+  readonly diHuDeclaration?: DiHuDeclaration;
 }
 
 export type HuEvaluationContext = HuContextBase &

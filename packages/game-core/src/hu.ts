@@ -46,6 +46,54 @@ const FACE_KEYS = [
   ...WIND_TILE_KINDS.map((wind) => `wind-${wind}`),
 ] as const;
 
+export interface WinningTileFacesInput {
+  readonly concealedTiles: readonly OrdinaryHandTile[];
+  readonly melds: readonly Meld[];
+}
+
+export function getWinningTileFaces(
+  input: WinningTileFacesInput,
+): readonly OrdinaryTileFace[] | null {
+  if (!isRecord(input) || !Array.isArray(input.concealedTiles) || !Array.isArray(input.melds)) {
+    return null;
+  }
+  if (
+    input.melds.length > 4 ||
+    input.concealedTiles.length !== (4 - input.melds.length) * 3 + 1 ||
+    !input.concealedTiles.every(isValidOrdinaryHandTile) ||
+    !input.melds.every(isValidMeld) ||
+    new Set(input.melds.map((meld) => meld.id)).size !== input.melds.length
+  ) {
+    return null;
+  }
+  const allTiles = [...input.concealedTiles, ...input.melds.flatMap((meld) => meld.tiles)];
+  if (
+    new Set(allTiles.map((tile) => tile.id)).size !== allTiles.length ||
+    [...countFaces(allTiles).values()].some((count) => count > 4)
+  ) {
+    return null;
+  }
+
+  const usedIds = new Set(allTiles.map((tile) => tile.id));
+  const counts = countFaces(allTiles);
+  const result: OrdinaryTileFace[] = [];
+  for (const key of FACE_KEYS) {
+    if ((counts.get(key) ?? 0) >= 4) continue;
+    const face = faceFromKey(key);
+    const copy = FOUR_COPY_INDEXES.find(
+      (candidate) => !usedIds.has(tileIdForFace(face, candidate)),
+    );
+    if (!copy) return null;
+    const winningTile = tileForFace(face, copy);
+    if (
+      evaluateHuStructure({ concealedTiles: input.concealedTiles, winningTile, melds: input.melds })
+    ) {
+      result.push(face);
+    }
+  }
+  return result;
+}
+
 export function evaluateHuStructure(input: HuStructureInput): HuStructure | null {
   if (!isValidInput(input)) return null;
 
@@ -153,6 +201,7 @@ export function isValidOrdinaryHandTile(tile: unknown): tile is OrdinaryHandTile
   if (!isRecord(tile) || !FOUR_COPY_INDEXES.some((copy) => copy === tile.copy)) return false;
   if (tile.category === 'number') {
     return (
+      hasExactKeys(tile, ['category', 'id', 'suit', 'rank', 'copy']) &&
       NUMBER_TILE_SUITS.some((suit) => suit === tile.suit) &&
       NUMBER_TILE_RANKS.some((rank) => rank === tile.rank) &&
       tile.id === `${tile.suit}-${tile.rank}-${tile.copy}`
@@ -160,6 +209,7 @@ export function isValidOrdinaryHandTile(tile: unknown): tile is OrdinaryHandTile
   }
   return (
     tile.category === 'wind' &&
+    hasExactKeys(tile, ['category', 'id', 'wind', 'copy']) &&
     WIND_TILE_KINDS.some((wind) => wind === tile.wind) &&
     tile.id === `wind-${tile.wind}-${tile.copy}`
   );
@@ -175,6 +225,7 @@ const HU_PATTERNS: readonly HuPattern[] = [
   'dragon-seven-pairs',
   'no-flower',
   'pressure-absolute',
+  'di-hu',
   'tian-hu',
   'hua-kai',
   'gang-kai',
@@ -396,16 +447,20 @@ function isValidHuPatterns(value: unknown): value is readonly HuPattern[] {
   }
   return (
     !(value.includes('hua-kai') && value.includes('gang-kai')) &&
+    !(value.includes('tian-hu') && value.includes('di-hu')) &&
     (!value.includes('tian-hu') || value.length === 1)
   );
 }
 
-function isValidOrdinaryTileFace(value: unknown): value is OrdinaryTileFace {
+export function isValidOrdinaryTileFace(value: unknown): value is OrdinaryTileFace {
   if (!isRecord(value)) return false;
   return value.category === 'number'
-    ? NUMBER_TILE_SUITS.some((suit) => suit === value.suit) &&
+    ? hasExactKeys(value, ['category', 'suit', 'rank']) &&
+        NUMBER_TILE_SUITS.some((suit) => suit === value.suit) &&
         NUMBER_TILE_RANKS.some((rank) => rank === value.rank)
-    : value.category === 'wind' && WIND_TILE_KINDS.some((wind) => wind === value.wind);
+    : value.category === 'wind' &&
+        hasExactKeys(value, ['category', 'wind']) &&
+        WIND_TILE_KINDS.some((wind) => wind === value.wind);
 }
 
 function hasAtMostFourOfEachFace(faces: readonly OrdinaryTileFace[]): boolean {
@@ -501,6 +556,30 @@ function faceKey(tile: OrdinaryHandTile): string {
   return ordinaryTileFaceKey(ordinaryTileFace(tile));
 }
 
+function tileIdForFace(
+  face: OrdinaryTileFace,
+  copy: (typeof FOUR_COPY_INDEXES)[number],
+): OrdinaryHandTile['id'] {
+  return face.category === 'number'
+    ? `${face.suit}-${face.rank}-${copy}`
+    : `wind-${face.wind}-${copy}`;
+}
+
+function tileForFace(
+  face: OrdinaryTileFace,
+  copy: (typeof FOUR_COPY_INDEXES)[number],
+): OrdinaryHandTile {
+  return face.category === 'number'
+    ? {
+        category: 'number',
+        id: `${face.suit}-${face.rank}-${copy}`,
+        suit: face.suit,
+        rank: face.rank,
+        copy,
+      }
+    : { category: 'wind', id: `wind-${face.wind}-${copy}`, wind: face.wind, copy };
+}
+
 function faceFromKey(key: string): OrdinaryTileFace {
   if (key.startsWith('wind-')) {
     const wind = WIND_TILE_KINDS.find((candidate) => `wind-${candidate}` === key);
@@ -516,4 +595,9 @@ function faceFromKey(key: string): OrdinaryTileFace {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }

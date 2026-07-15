@@ -8,8 +8,14 @@ import type {
   DiscardAction,
   GameAction,
   ReactionResponseType,
+  SubmitDiHuDecisionAction,
 } from './actions';
-import { isValidMeld } from './hu';
+import {
+  getWinningTileFaces,
+  isValidMeld,
+  isValidOrdinaryTileFace as isValidOrdinaryTileFaceShape,
+  ordinaryTileFaceKey,
+} from './hu';
 import type { GameCreationOptions, StartGameOptions } from './options';
 import {
   FOUR_COPY_FLOWER_KINDS,
@@ -25,6 +31,9 @@ import type {
   DrawTileFromWallResult,
   DrawnTileResolutionResult,
   BuGangReactionWindow,
+  DiHuDeclaration,
+  DiHuDeclarationState,
+  DiHuDecisionAvailability,
   DiscardReactionWindow,
   FlowerKongKind,
   FlowerReplacementResult,
@@ -66,6 +75,7 @@ export type {
   ReactionResponseType,
   ResolveReactionWindowAction,
   SubmitReactionAction,
+  SubmitDiHuDecisionAction,
   StartGameAction,
 } from './actions';
 
@@ -94,11 +104,78 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return declareBuGangReducer(state, action);
     case 'DECLARE_SELF_DRAW_HU':
       return declareSelfDrawHuReducer(state, action);
+    case 'SUBMIT_DI_HU_DECISION':
+      return submitDiHuDecisionReducer(state, action);
     case 'PENG':
     case 'GANG':
     case 'HU':
       return reactionReducer(state);
+    default:
+      return state;
   }
+}
+
+export function getAvailableDiHuDecision(
+  state: GameState,
+  playerIndex: number,
+): DiHuDecisionAvailability | null {
+  const declarations = validDiHuDeclarationState(state);
+  if (
+    !declarations ||
+    declarations.status !== 'collecting' ||
+    state.phase !== 'playing' ||
+    state.turnStage !== 'waiting-for-di-hu-decision' ||
+    state.currentPlayerIndex !== state.dealerIndex ||
+    declarations.pendingPlayerIndices[0] !== playerIndex ||
+    state.pendingAction.type !== 'di-hu-decision' ||
+    state.pendingAction.playerIndex !== playerIndex ||
+    state.pendingAction.seat !== state.players[playerIndex]?.seat
+  ) {
+    return null;
+  }
+  return { playerIndex, decisions: ['declare', 'pass'] };
+}
+
+export function submitDiHuDecisionReducer(
+  state: GameState,
+  action: SubmitDiHuDecisionAction,
+): GameState {
+  if (
+    Object.keys(action).length !== 3 ||
+    !Number.isInteger(action.playerIndex) ||
+    (action.decision !== 'declare' && action.decision !== 'pass') ||
+    !getAvailableDiHuDecision(state, action.playerIndex)
+  ) {
+    return state;
+  }
+  const current = validDiHuDeclarationState(state);
+  const player = state.players[action.playerIndex];
+  if (!current || current.status !== 'collecting' || !player) return state;
+  const waits = getWinningTileFaces({ concealedTiles: player.hand, melds: player.melds });
+  if (!waits?.length) return state;
+  const declarations =
+    action.decision === 'declare'
+      ? [...current.declarations, { playerIndex: action.playerIndex, winningTileFaces: waits }]
+      : [...current.declarations];
+  const pendingPlayerIndices = current.pendingPlayerIndices.slice(1);
+  const nextPlayerIndex = pendingPlayerIndices[0];
+  return {
+    ...copyGameState(state),
+    currentPlayerIndex: state.dealerIndex,
+    turnStage: nextPlayerIndex === undefined ? 'waiting-for-discard' : 'waiting-for-di-hu-decision',
+    pendingAction:
+      nextPlayerIndex === undefined
+        ? createPendingAction(state.players, state.dealerIndex, 'discard')
+        : createPendingAction(state.players, nextPlayerIndex, 'di-hu-decision'),
+    diHuDeclarations:
+      nextPlayerIndex === undefined
+        ? { status: 'closed', declarations }
+        : { status: 'collecting', pendingPlayerIndices, declarations },
+    pendingScoringEvents: state.pendingScoringEvents,
+    ...(state.selfDrawProvenance === undefined
+      ? {}
+      : { selfDrawProvenance: state.selfDrawProvenance }),
+  };
 }
 
 export interface AvailableBuGang {
@@ -210,6 +287,8 @@ export function declareSelfDrawHuReducer(
 }
 
 export function getAvailableBuGangs(state: GameState, playerIndex: number): AvailableBuGang[] {
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return [];
+  if (diHuDeclarationFor(state, playerIndex)) return [];
   return findBuGangCandidates(state, playerIndex).map((candidate) => ({
     targetMeldId: candidate.meld.id,
     tileFace: ordinaryTileFace(candidate.tile),
@@ -217,9 +296,11 @@ export function getAvailableBuGangs(state: GameState, playerIndex: number): Avai
 }
 
 export function getAvailableAnGangs(state: GameState, playerIndex: number): OrdinaryTileFace[] {
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return [];
   if (!isAnGangTurn(state, playerIndex)) return [];
   const player = state.players[playerIndex];
   if (!player || !Array.isArray(player.hand) || !player.hand.every(isValidOrdinaryTile)) return [];
+  const declaration = diHuDeclarationFor(state, playerIndex);
 
   const faces: OrdinaryTileFace[] = [];
   for (const tile of player.hand) {
@@ -228,7 +309,8 @@ export function getAvailableAnGangs(state: GameState, playerIndex: number): Ordi
     const candidates = matchingAnGangTiles(player.hand, tileFace);
     if (
       candidates.length >= 4 &&
-      new Set(candidates.map((candidate) => candidate.id)).size === candidates.length
+      new Set(candidates.map((candidate) => candidate.id)).size === candidates.length &&
+      (!declaration || preservesDiHuWaitAfterAnGang(player, candidates.slice(0, 4), declaration))
     ) {
       faces.push(tileFace);
     }
@@ -343,6 +425,12 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
 
 export function declareBuGangReducer(state: GameState, action: DeclareBuGangAction): GameState {
   if (
+    (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) ||
+    diHuDeclarationFor(state, action.playerIndex)
+  ) {
+    return state;
+  }
+  if (
     !Number.isInteger(action.playerIndex) ||
     typeof action.meldId !== 'string' ||
     action.meldId.length === 0
@@ -396,6 +484,8 @@ export function declareBuGangReducer(state: GameState, action: DeclareBuGangActi
           responderFlowers: responder.flowers,
           responderPassHu: responder.passHu,
           allMelds: state.players.flatMap((player) => player.melds),
+          dealerIndex: state.dealerIndex,
+          responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
           declarerPlayerIndex: action.playerIndex,
           targetTile: candidate.tile,
         });
@@ -405,6 +495,7 @@ export function declareBuGangReducer(state: GameState, action: DeclareBuGangActi
 }
 
 export function drawReducer(state: GameState): GameState {
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return state;
   if (state.phase !== 'playing' || state.turnStage !== 'waiting-for-draw') {
     return state;
   }
@@ -482,6 +573,9 @@ export function drawReducer(state: GameState): GameState {
       pendingScoringEvents,
     ),
     specialDiscardTracking: state.specialDiscardTracking,
+    ...(state.diHuDeclarations === undefined
+      ? {}
+      : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
@@ -496,6 +590,16 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
 
   if (!currentPlayer) {
     throw new Error(`Invalid current player index ${state.currentPlayerIndex}`);
+  }
+
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return state;
+  const diHuDeclaration = diHuDeclarationFor(state, state.currentPlayerIndex);
+  if (
+    diHuDeclaration &&
+    (state.selfDrawProvenance?.playerIndex !== state.currentPlayerIndex ||
+      state.selfDrawProvenance.tileId !== action.tileId)
+  ) {
+    return state;
   }
 
   if (
@@ -581,6 +685,8 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
         responderFlowers: responder.flowers,
         responderPassHu: responder.passHu,
         allMelds: players.flatMap((player) => player.melds),
+        dealerIndex: state.dealerIndex,
+        responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
         fromPlayerIndex: state.currentPlayerIndex,
         discardedTile,
         canDrawFromWallTail: state.wall.length > 0,
@@ -603,6 +709,9 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     pendingScoringEvents: [...(state.pendingScoringEvents ?? []), ...specialDiscardUpdate.events],
     handProgressFacts: specialDiscardUpdate.handProgressFacts,
     specialDiscardTracking: specialDiscardUpdate.tracking,
+    ...(state.diHuDeclarations === undefined
+      ? {}
+      : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
     selfDrawProvenance: undefined,
   };
 }
@@ -616,6 +725,7 @@ export function submitReactionReducer(
   playerIndex: number,
   responseType: ReactionResponseType,
 ): GameState {
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return state;
   if (
     state.reactionWindow &&
     state.reactionWindow.source !== 'discard' &&
@@ -705,6 +815,7 @@ export function submitReactionReducer(
 }
 
 export function resolveReactionWindowReducer(state: GameState): GameState {
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return state;
   const window = state.reactionWindow;
 
   if (window && window.source !== 'discard' && window.source !== 'bu-gang') return state;
@@ -722,6 +833,13 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
     )
   ) {
     return state;
+  }
+
+  if (
+    window.source === 'bu-gang' &&
+    diHuDeclarationFor(state, window.intent.declarerPlayerIndex) !== null
+  ) {
+    return cancelStaleBuGangIntent(state, window);
   }
 
   const nonPassResponses = window.responses.filter(
@@ -775,6 +893,25 @@ function resolveMingGang(
   const discardedTile = window.discardedTile;
   const lastDiscard = state.lastDiscard;
   const latestDiscard = discarder?.discardPile.at(-1);
+  const currentAvailability =
+    player && isOrdinaryHandTile(discardedTile)
+      ? getRuleSet(state.ruleSetId).getAvailableReactions({
+          source: 'discard',
+          playerCount: state.players.length,
+          responderPlayerIndex: playerIndex,
+          responderSeat: player.seat,
+          responderConcealedTiles: player.hand,
+          responderMelds: player.melds,
+          responderFlowers: player.flowers,
+          responderPassHu: player.passHu,
+          allMelds: state.players.flatMap((candidate) => candidate.melds),
+          dealerIndex: state.dealerIndex,
+          responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
+          fromPlayerIndex: window.fromPlayerIndex,
+          discardedTile,
+          canDrawFromWallTail: state.wall.length > 0,
+        })
+      : null;
 
   if (
     !Number.isInteger(playerIndex) ||
@@ -786,6 +923,7 @@ function resolveMingGang(
     window.fromPlayerIndex === playerIndex ||
     window.fromSeat !== discarder.seat ||
     !isOrdinaryHandTile(discardedTile) ||
+    !currentAvailability?.responseTypes.includes('ming-gang') ||
     !window.availableReactions.some(
       (availability) =>
         availability.playerIndex === playerIndex &&
@@ -925,6 +1063,9 @@ function resolveMingGang(
       pendingScoringEvents,
     ),
     specialDiscardTracking: trackingAfterSeatClaim(state, playerIndex),
+    ...(state.diHuDeclarations === undefined
+      ? {}
+      : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
@@ -952,6 +1093,7 @@ function resolvePeng(
     window.fromPlayerIndex === pengPlayerIndex ||
     window.fromSeat !== discarder.seat ||
     !isOrdinaryHandTile(discardedTile) ||
+    diHuDeclarationFor(state, pengPlayerIndex) !== null ||
     !window.availableReactions.some(
       (availability) =>
         availability.playerIndex === pengPlayerIndex &&
@@ -1066,6 +1208,8 @@ function resolveHu(
       melds: player.melds,
       flowers: player.flowers,
       allMelds: state.players.flatMap((candidate) => candidate.melds),
+      dealerIndex: state.dealerIndex,
+      diHuDeclaration: diHuDeclarationFor(state, response.playerIndex) ?? undefined,
     });
     return evaluation ? { playerIndex: response.playerIndex, evaluation } : null;
   });
@@ -1135,6 +1279,9 @@ function resolveHu(
 }
 
 function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameState {
+  if (diHuDeclarationFor(state, window.intent.declarerPlayerIndex) !== null) {
+    return cancelStaleBuGangIntent(state, window);
+  }
   const pendingIntent = validatePendingBuGangIntent(state, window);
   if (!pendingIntent || state.wall.length === 0) return state;
   const { declarer, meld, tile } = pendingIntent;
@@ -1223,6 +1370,17 @@ function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameSta
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
 }
 
+function cancelStaleBuGangIntent(state: GameState, window: BuGangReactionWindow): GameState {
+  const declarerPlayerIndex = window.intent.declarerPlayerIndex;
+  return {
+    ...state,
+    currentPlayerIndex: declarerPlayerIndex,
+    turnStage: 'waiting-for-discard',
+    pendingAction: createPendingAction(state.players, declarerPlayerIndex, 'discard'),
+    reactionWindow: { ...window, status: 'closed' },
+  };
+}
+
 interface ValidPendingBuGangIntent {
   readonly declarer: PlayerState;
   readonly meld: PlayerState['melds'][number];
@@ -1265,6 +1423,7 @@ function validatePendingBuGangIntent(
   return { declarer, meld, tile };
 }
 export function reactionReducer(state: GameState): GameState {
+  if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return state;
   return copyGameState(state);
 }
 
@@ -1287,6 +1446,7 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    diHuDeclarations: { status: 'closed', declarations: [] },
   };
 }
 
@@ -1316,6 +1476,7 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    diHuDeclarations: { status: 'closed', declarations: [] },
   });
 }
 
@@ -1415,16 +1576,42 @@ function dealInitialHands(state: GameState): GameState {
     }
   }
 
+  const eligiblePlayerIndices =
+    phase === 'playing'
+      ? playerOrderFromDealer(state.dealerIndex)
+          .filter((playerIndex) => playerIndex !== state.dealerIndex)
+          .filter((playerIndex) => {
+            const player = players[playerIndex];
+            return (
+              player !== undefined &&
+              (getWinningTileFaces({ concealedTiles: player.hand, melds: player.melds })?.length ??
+                0) > 0
+            );
+          })
+      : [];
+  const firstEligiblePlayerIndex = eligiblePlayerIndices[0];
   const nextState: GameState = {
     ...state,
     players,
     wall: [...wall.tiles],
     currentPlayerIndex: state.dealerIndex,
     phase,
-    turnStage: 'waiting-for-discard',
-    pendingAction: createPendingAction(players, state.dealerIndex, 'discard'),
+    turnStage:
+      firstEligiblePlayerIndex === undefined ? 'waiting-for-discard' : 'waiting-for-di-hu-decision',
+    pendingAction:
+      firstEligiblePlayerIndex === undefined
+        ? createPendingAction(players, state.dealerIndex, 'discard')
+        : createPendingAction(players, firstEligiblePlayerIndex, 'di-hu-decision'),
     pendingScoringEvents,
     handProgressFacts,
+    diHuDeclarations:
+      firstEligiblePlayerIndex === undefined
+        ? { status: 'closed', declarations: [] }
+        : {
+            status: 'collecting',
+            pendingPlayerIndices: eligiblePlayerIndices,
+            declarations: [],
+          },
     ...(phase === 'playing' && dealerInitialTile
       ? {
           selfDrawProvenance: {
@@ -2023,11 +2210,181 @@ function copyGameState(state: GameState): GameState {
         winds: [...sequence.winds],
       })),
     },
+    ...(state.diHuDeclarations === undefined
+      ? {}
+      : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
     ...(state.selfDrawProvenance === undefined
       ? {}
       : { selfDrawProvenance: { ...state.selfDrawProvenance } }),
     ...(state.result === undefined ? {} : { result: copyHandResult(state.result) }),
   };
+}
+
+function copyDiHuDeclarationState(state: DiHuDeclarationState): DiHuDeclarationState {
+  const declarations = state.declarations.map((declaration) => ({
+    playerIndex: declaration.playerIndex,
+    winningTileFaces: declaration.winningTileFaces.map((face) => ({ ...face })),
+  }));
+  return state.status === 'collecting'
+    ? { status: 'collecting', pendingPlayerIndices: [...state.pendingPlayerIndices], declarations }
+    : { status: 'closed', declarations };
+}
+
+function validDiHuDeclarationState(state: unknown): DiHuDeclarationState | null {
+  if (
+    !isRecord(state) ||
+    !Array.isArray(state.players) ||
+    typeof state.dealerIndex !== 'number' ||
+    !Number.isInteger(state.dealerIndex)
+  ) {
+    return null;
+  }
+  const players = state.players;
+  const playerCount = players.length;
+  const dealerIndex = state.dealerIndex;
+  const value = state.diHuDeclarations;
+  if (!isRecord(value) || !Array.isArray(value.declarations)) return null;
+  const declarations = value.declarations;
+  const keys = Object.keys(value);
+  if (
+    !declarations.every((declaration) =>
+      isValidDiHuDeclaration(declaration, playerCount, dealerIndex),
+    )
+  ) {
+    return null;
+  }
+  const validDeclarations: DiHuDeclaration[] = declarations;
+  const declaredIndices = validDeclarations.map((declaration) => declaration.playerIndex);
+  if (new Set(declaredIndices).size !== declaredIndices.length) return null;
+  const seatOrder = playerOrderFromDealer(dealerIndex).filter((index) => index !== dealerIndex);
+  const declaredPositions = declaredIndices.map((index) => seatOrder.indexOf(index));
+  if (
+    declaredPositions.some((position) => position < 0) ||
+    declaredPositions.some(
+      (position, index) => index > 0 && position <= declaredPositions[index - 1]!,
+    )
+  ) {
+    return null;
+  }
+  if (value.status === 'closed') {
+    return keys.length === 2 && keys.includes('status') && keys.includes('declarations')
+      ? { status: 'closed', declarations: validDeclarations }
+      : null;
+  }
+  if (value.status !== 'collecting' || !Array.isArray(value.pendingPlayerIndices)) return null;
+  if (
+    keys.length !== 3 ||
+    !keys.includes('status') ||
+    !keys.includes('pendingPlayerIndices') ||
+    !keys.includes('declarations')
+  ) {
+    return null;
+  }
+  const pendingPlayerIndices = value.pendingPlayerIndices;
+  if (
+    pendingPlayerIndices.length === 0 ||
+    pendingPlayerIndices.some(
+      (index) =>
+        typeof index !== 'number' ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= playerCount ||
+        index === dealerIndex ||
+        declaredIndices.includes(index),
+    ) ||
+    new Set(pendingPlayerIndices).size !== pendingPlayerIndices.length
+  ) {
+    return null;
+  }
+  const validPendingPlayerIndices: number[] = pendingPlayerIndices;
+  if (
+    validPendingPlayerIndices.some((index) => {
+      const player = players[index];
+      if (!isRecord(player) || !Array.isArray(player.hand) || !Array.isArray(player.melds)) {
+        return true;
+      }
+      const waits = getWinningTileFaces({
+        concealedTiles: player.hand,
+        melds: player.melds,
+      });
+      return !waits?.length;
+    })
+  ) {
+    return null;
+  }
+  const positions = validPendingPlayerIndices.map((index) => seatOrder.indexOf(index));
+  if (positions.some((position) => position < 0)) return null;
+  if (positions.some((position, index) => index > 0 && position <= positions[index - 1]!))
+    return null;
+  if (declaredPositions.at(-1) !== undefined && declaredPositions.at(-1)! >= positions[0]!) {
+    return null;
+  }
+  return {
+    status: 'collecting',
+    pendingPlayerIndices: validPendingPlayerIndices,
+    declarations: validDeclarations,
+  };
+}
+
+function isValidDiHuDeclaration(
+  declaration: unknown,
+  playerCount: number,
+  dealerIndex: number,
+): declaration is DiHuDeclaration {
+  if (
+    !isRecord(declaration) ||
+    Object.keys(declaration).length !== 2 ||
+    !Object.keys(declaration).includes('playerIndex') ||
+    !Object.keys(declaration).includes('winningTileFaces') ||
+    typeof declaration.playerIndex !== 'number' ||
+    !Number.isInteger(declaration.playerIndex) ||
+    declaration.playerIndex < 0 ||
+    declaration.playerIndex >= playerCount ||
+    declaration.playerIndex === dealerIndex ||
+    !Array.isArray(declaration.winningTileFaces)
+  ) {
+    return false;
+  }
+  const faces = declaration.winningTileFaces;
+  return (
+    faces.length > 0 &&
+    faces.every(isValidOrdinaryTileFaceShape) &&
+    new Set(faces.map(ordinaryTileFaceKey)).size === faces.length &&
+    faces.every(
+      (face, index) => index === 0 || compareOrdinaryTileFaces(faces[index - 1]!, face) < 0,
+    )
+  );
+}
+
+function diHuDeclarationFor(state: GameState, playerIndex: number): DiHuDeclaration | null {
+  const declarations = validDiHuDeclarationState(state);
+  return declarations?.declarations.find((value) => value.playerIndex === playerIndex) ?? null;
+}
+
+function preservesDiHuWaitAfterAnGang(
+  player: PlayerState,
+  selectedTiles: readonly OrdinaryHandTile[],
+  declaration: DiHuDeclaration,
+): boolean {
+  if (selectedTiles.length !== 4) return false;
+  const selectedIds = new Set(selectedTiles.map((tile) => tile.id));
+  const waits = getWinningTileFaces({
+    concealedTiles: player.hand.filter((tile) => !selectedIds.has(tile.id)),
+    melds: [...player.melds, { id: 'di-hu-an-gang-query', type: 'an-gang', tiles: selectedTiles }],
+  });
+  return waits !== null && sameOrdinaryTileFaces(waits, declaration.winningTileFaces);
+}
+
+function sameOrdinaryTileFaces(
+  left: readonly OrdinaryTileFace[],
+  right: readonly OrdinaryTileFace[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((face, index) =>
+      right[index] ? isSameOrdinaryTileFaceValue(face, right[index]) : false,
+    )
+  );
 }
 
 function createReactionWindow(
@@ -2187,6 +2544,8 @@ function validSelfDrawHuCandidate(
     melds: player.melds,
     flowers: player.flowers,
     allMelds: state.players.flatMap((candidate) => candidate.melds),
+    dealerIndex: state.dealerIndex,
+    diHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
     ...sourceDetails,
   });
   return evaluation
@@ -2224,6 +2583,7 @@ function isSafeSelfDrawCandidateState(value: unknown, playerIndex: number): valu
   ) {
     return false;
   }
+  if (value.diHuDeclarations !== undefined && !validDiHuDeclarationState(value)) return false;
   const player = value.players[playerIndex];
   if (
     !isRecord(player) ||
@@ -2259,9 +2619,17 @@ function isValidSelfDrawProvenance(
   )
     return false;
   if (value.source === 'flower-replacement') {
-    return typeof value.formedFlowerKongDuringReplacement === 'boolean';
+    return (
+      hasOnlyKeys(value, [
+        'playerIndex',
+        'tileId',
+        'source',
+        'formedFlowerKongDuringReplacement',
+      ]) && typeof value.formedFlowerKongDuringReplacement === 'boolean'
+    );
   }
   return (
+    hasOnlyKeys(value, ['playerIndex', 'tileId', 'source']) &&
     (value.source === 'initial-dealer' ||
       value.source === 'wall-head' ||
       value.source === 'ming-gang-tail' ||

@@ -26,6 +26,16 @@ import {
 
 const deck = createNanjingMahjongDeck();
 
+function passInitialDiHuDecisions(initial: GameState): GameState {
+  let state = initial;
+  while (state.diHuDeclarations?.status === 'collecting') {
+    const playerIndex = state.diHuDeclarations.pendingPlayerIndices[0];
+    if (playerIndex === undefined) throw new Error('Missing Di Hu decision player');
+    state = applyAction(state, { type: 'SUBMIT_DI_HU_DECISION', playerIndex, decision: 'pass' });
+  }
+  return state;
+}
+
 function ordinary(id: TileId): OrdinaryHandTile {
   const value = deck.find((candidate) => candidate.id === id);
   if (!value || value.category === 'flower') throw new Error(`Missing ordinary tile ${id}`);
@@ -87,10 +97,12 @@ function initialTianHuState(): GameState {
   }
   const selected = new Set(first53.map((tile) => tile.id));
   const ready = createGame();
-  return startGame({
-    ...ready,
-    wall: [...first53, ...deck.filter((tile) => !selected.has(tile.id))],
-  });
+  return passInitialDiHuDecisions(
+    startGame({
+      ...ready,
+      wall: [...first53, ...deck.filter((tile) => !selected.has(tile.id))],
+    }),
+  );
 }
 
 function initialFlowerTianHuState(): GameState {
@@ -109,7 +121,9 @@ function initialFlowerTianHuState(): GameState {
   }
   const selected = new Set(first53.map((tile) => tile.id));
   const middle = deck.filter((tile) => !selected.has(tile.id) && tile.id !== winningTileId);
-  return startGame({ ...createGame(), wall: [...first53, ...middle, ordinary(winningTileId)] });
+  return passInitialDiHuDecisions(
+    startGame({ ...createGame(), wall: [...first53, ...middle, ordinary(winningTileId)] }),
+  );
 }
 
 function anGangSelfDrawState(): GameState {
@@ -291,10 +305,12 @@ function initialDealerAnGangState(): GameState {
     'wan-9-3',
     'wan-9-4',
   ] satisfies TileId[];
-  return startGame({
-    ...createGame(),
-    wall: customInitialWall(dealerTiles, {}, [ordinary(winningTileId)]),
-  });
+  return passInitialDiHuDecisions(
+    startGame({
+      ...createGame(),
+      wall: customInitialWall(dealerTiles, {}, [ordinary(winningTileId)]),
+    }),
+  );
 }
 
 describe('current-reachable self-draw Hu flow', () => {

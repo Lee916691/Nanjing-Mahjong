@@ -68,6 +68,30 @@ const flowerTransfers = (playerIndex: number, amount = 20) =>
     .filter((payerIndex) => payerIndex !== playerIndex)
     .map((payerIndex) => transfer(payerIndex, playerIndex, amount));
 
+function passInitialDiHuDecisions(initial: GameState): GameState {
+  let state = initial;
+  while (state.diHuDeclarations?.status === 'collecting') {
+    const playerIndex = state.diHuDeclarations.pendingPlayerIndices[0];
+    if (playerIndex === undefined) throw new Error('Missing Di Hu decision player');
+    state = applyAction(state, { type: 'SUBMIT_DI_HU_DECISION', playerIndex, decision: 'pass' });
+  }
+  return state;
+}
+
+function passMatchInitialDiHuDecisions(initial: MatchState): MatchState {
+  let match = initial;
+  while (match.currentHand.diHuDeclarations?.status === 'collecting') {
+    const playerIndex = match.currentHand.diHuDeclarations.pendingPlayerIndices[0];
+    if (playerIndex === undefined) throw new Error('Missing Di Hu decision player');
+    match = applyGameActionToMatch(match, {
+      type: 'SUBMIT_DI_HU_DECISION',
+      playerIndex,
+      decision: 'pass',
+    });
+  }
+  return match;
+}
+
 describe('Meld player state model', () => {
   it('exports the reaction resolution status and action types', () => {
     const reactionWindowStatus: ReactionWindowStatus = 'awaiting-resolution';
@@ -1360,7 +1384,7 @@ describe('Pending scoring event settlement', () => {
   });
 
   it('applies an ordinary action without changing scores', () => {
-    const match = startMatch(createMatch());
+    const match = passMatchInitialDiHuDecisions(startMatch(createMatch()));
     const tileId = playerAt(match.currentHand, match.dealerIndex).hand[0]?.id;
     if (!tileId) throw new Error('Expected dealer tile');
     const result = applyGameActionToMatch(match, { type: 'DISCARD_TILE', tileId });
@@ -1970,7 +1994,10 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
 
   it('starts a ready game by dealing complete ordinary opening hands', () => {
     const readyGame = createInitialGame();
-    const playingGame = startGame(readyGame);
+    const initialDeal = startGame(readyGame);
+    expect(initialDeal.turnStage).toBe('waiting-for-di-hu-decision');
+    expect(initialDeal.diHuDeclarations?.status).toBe('collecting');
+    const playingGame = passInitialDiHuDecisions(initialDeal);
 
     expect(playingGame).not.toBe(readyGame);
     expect(playingGame.phase).toBe('playing');
@@ -1998,7 +2025,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
   });
 
   it('lets the dealer discard first after startGame and opens a reaction window', () => {
-    const playingGame = startGame(createGame());
+    const playingGame = passInitialDiHuDecisions(startGame(createGame()));
     const dealerTile = playerAt(playingGame, playingGame.dealerIndex).hand[0];
 
     if (!dealerTile) {
@@ -2045,7 +2072,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
 
   it('appends a discard record after existing claimed history', () => {
     const deck = createNanjingMahjongDeck();
-    const playingGame = startGame(createGame());
+    const playingGame = passInitialDiHuDecisions(startGame(createGame()));
     const dealer = playerAt(playingGame, playingGame.dealerIndex);
     const discardedTile = dealer.hand[0];
     const oldRecord: DiscardRecord = {

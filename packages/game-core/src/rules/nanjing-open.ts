@@ -1,8 +1,13 @@
 import type { ReactionResponseType } from '../actions';
-import { evaluateHuStructure, ordinaryTileFace, ordinaryTileFaceKey } from '../hu';
+import {
+  evaluateHuStructure,
+  getWinningTileFaces,
+  isValidOrdinaryTileFace,
+  ordinaryTileFace,
+  ordinaryTileFaceKey,
+} from '../hu';
 import type { HuStructure } from '../hu';
 import {
-  FOUR_COPY_INDEXES,
   NUMBER_TILE_RANKS,
   NUMBER_TILE_SUITS,
   WIND_TILE_KINDS,
@@ -32,6 +37,7 @@ const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
   'dragon-seven-pairs': 100,
   'no-flower': 30,
   'pressure-absolute': 30,
+  'di-hu': 30,
   'tian-hu': 0,
   'hua-kai': 10,
   'gang-kai': 20,
@@ -189,6 +195,8 @@ function getNanjingOpenAvailableReactions(
       melds: context.responderMelds,
       flowers: context.responderFlowers,
       allMelds: context.allMelds,
+      dealerIndex: context.dealerIndex,
+      diHuDeclaration: context.responderDiHuDeclaration,
     })
   ) {
     responseTypes.push('hu');
@@ -198,8 +206,14 @@ function getNanjingOpenAvailableReactions(
     const matchingTileCount = context.responderConcealedTiles.filter((tile) =>
       isSameOrdinaryTileFace(tile, targetTile),
     ).length;
-    if (matchingTileCount >= 2) responseTypes.push('peng');
-    if (matchingTileCount >= 3 && context.canDrawFromWallTail) responseTypes.push('ming-gang');
+    if (!context.responderDiHuDeclaration && matchingTileCount >= 2) responseTypes.push('peng');
+    if (
+      matchingTileCount >= 3 &&
+      context.canDrawFromWallTail &&
+      (!context.responderDiHuDeclaration || preservesDiHuWaitAfterMingGang(context, targetTile))
+    ) {
+      responseTypes.push('ming-gang');
+    }
   }
 
   return {
@@ -210,6 +224,9 @@ function getNanjingOpenAvailableReactions(
 }
 
 function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | null {
+  if (context.diHuDeclaration !== undefined && !isValidDiHuDeclaration(context.diHuDeclaration)) {
+    return null;
+  }
   const structure = evaluateHuStructure({
     concealedTiles: context.concealedTiles,
     winningTile: context.winningTile,
@@ -218,8 +235,12 @@ function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | nul
   if (!structure) return null;
 
   if (context.source === 'self-draw' && context.drawSource === 'initial-dealer') {
+    if (context.diHuDeclaration) return null;
     return { structure, patterns: ['tian-hu'], hardFlowerCount: 0, softFlowerCount: 0 };
   }
+
+  const diHu = isApplicableDiHuDeclaration(context);
+  if (context.diHuDeclaration !== undefined && !diHu) return null;
 
   const patterns: HuPattern[] = [];
   const menQing = context.melds.every((meld) => meld.type !== 'peng');
@@ -261,6 +282,7 @@ function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | nul
   if (structure.type === 'dragon-seven-pairs') patterns.push('dragon-seven-pairs');
   if (context.flowers.length === 0) patterns.push('no-flower');
   if (pressureAbsolute) patterns.push('pressure-absolute');
+  if (diHu) patterns.push('di-hu');
   if (context.source === 'self-draw') {
     if (
       context.drawSource === 'ming-gang-tail' ||
@@ -368,58 +390,117 @@ function isSoftWait(structure: HuStructure, context: HuEvaluationContext): boole
 }
 
 function isUniqueStructuralWait(context: HuEvaluationContext): boolean {
-  let winningFaceCount = 0;
-  for (const face of allOrdinaryFaces()) {
-    const candidate = candidateTile(face, context);
-    if (
-      candidate &&
-      evaluateHuStructure({
-        concealedTiles: context.concealedTiles,
-        winningTile: candidate,
-        melds: context.melds,
-      })
-    ) {
-      winningFaceCount += 1;
-      if (winningFaceCount > 1) return false;
-    }
+  return (
+    getWinningTileFaces({
+      concealedTiles: context.concealedTiles,
+      melds: context.melds,
+    })?.length === 1
+  );
+}
+
+function isApplicableDiHuDeclaration(context: HuEvaluationContext): boolean {
+  const declaration = context.diHuDeclaration;
+  return (
+    isValidDiHuDeclaration(declaration) &&
+    hasValidDiHuHuSource(context) &&
+    declaration.playerIndex === context.winnerPlayerIndex &&
+    Number.isInteger(context.dealerIndex) &&
+    context.dealerIndex !== context.winnerPlayerIndex &&
+    declaration.winningTileFaces.some((face) =>
+      isSameOrdinaryTileFaceValue(face, ordinaryTileFace(context.winningTile)),
+    )
+  );
+}
+
+function hasValidDiHuHuSource(context: HuEvaluationContext): boolean {
+  if (context.source !== 'self-draw') return true;
+  if (context.drawSource === 'flower-replacement') {
+    return typeof context.formedFlowerKongDuringReplacement === 'boolean';
   }
-  return winningFaceCount === 1;
+  return (
+    (context.drawSource === 'wall-head' ||
+      context.drawSource === 'ming-gang-tail' ||
+      context.drawSource === 'an-gang-tail') &&
+    !Object.prototype.hasOwnProperty.call(context, 'formedFlowerKongDuringReplacement')
+  );
 }
 
-function candidateTile(
-  face: OrdinaryTileFace,
-  context: HuEvaluationContext,
-): OrdinaryHandTile | null {
-  const usedIds = new Set<string>([
-    ...context.concealedTiles.map((tile) => tile.id),
-    ...context.melds.flatMap((meld) => meld.tiles.map((tile) => tile.id)),
-  ]);
-  const copy = FOUR_COPY_INDEXES.find((candidate) => {
-    const id =
-      face.category === 'number'
-        ? `${face.suit}-${face.rank}-${candidate}`
-        : `wind-${face.wind}-${candidate}`;
-    return !usedIds.has(id);
+function preservesDiHuWaitAfterMingGang(
+  context: Extract<ReactionAvailabilityContext, { source: 'discard' }>,
+  targetTile: OrdinaryHandTile,
+): boolean {
+  const declaration = context.responderDiHuDeclaration;
+  if (!isValidDiHuDeclaration(declaration)) return false;
+  const selected = context.responderConcealedTiles
+    .filter((tile) => isSameOrdinaryTileFace(tile, targetTile))
+    .slice(0, 3);
+  if (selected.length !== 3) return false;
+  const selectedIds = new Set(selected.map((tile) => tile.id));
+  const waits = getWinningTileFaces({
+    concealedTiles: context.responderConcealedTiles.filter((tile) => !selectedIds.has(tile.id)),
+    melds: [
+      ...context.responderMelds,
+      {
+        id: 'di-hu-ming-gang-query',
+        type: 'ming-gang',
+        tiles: [...selected, targetTile],
+        claimedTileId: targetTile.id,
+        fromPlayerIndex: context.fromPlayerIndex,
+      },
+    ],
   });
-  if (!copy) return null;
-  return face.category === 'number'
-    ? {
-        category: 'number',
-        suit: face.suit,
-        rank: face.rank,
-        copy,
-        id: `${face.suit}-${face.rank}-${copy}`,
-      }
-    : { category: 'wind', wind: face.wind, copy, id: `wind-${face.wind}-${copy}` };
+  return waits !== null && sameWaitFaces(waits, declaration.winningTileFaces);
 }
 
-function allOrdinaryFaces(): OrdinaryTileFace[] {
-  return [
+function isValidDiHuDeclaration(
+  value: unknown,
+): value is NonNullable<HuEvaluationContext['diHuDeclaration']> {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ['playerIndex', 'winningTileFaces']) ||
+    !isPlayerIndex(value.playerIndex) ||
+    !Array.isArray(value.winningTileFaces)
+  ) {
+    return false;
+  }
+  const faces = value.winningTileFaces;
+  return (
+    faces.length > 0 &&
+    faces.every(isValidOrdinaryTileFace) &&
+    new Set(faces.map(ordinaryTileFaceKey)).size === faces.length &&
+    faces.every(
+      (face, index) => index === 0 || compareOrdinaryTileFaces(faces[index - 1]!, face) < 0,
+    )
+  );
+}
+
+function compareOrdinaryTileFaces(left: OrdinaryTileFace, right: OrdinaryTileFace): number {
+  const ordered = [
     ...NUMBER_TILE_SUITS.flatMap((suit) =>
       NUMBER_TILE_RANKS.map((rank): OrdinaryTileFace => ({ category: 'number', suit, rank })),
     ),
     ...WIND_TILE_KINDS.map((wind): OrdinaryTileFace => ({ category: 'wind', wind })),
   ];
+  return (
+    ordered.findIndex((face) => isSameOrdinaryTileFaceValue(face, left)) -
+    ordered.findIndex((face) => isSameOrdinaryTileFaceValue(face, right))
+  );
+}
+
+function sameWaitFaces(
+  left: readonly OrdinaryTileFace[],
+  right: readonly OrdinaryTileFace[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((face, index) =>
+      right[index] ? isSameOrdinaryTileFaceValue(face, right[index]) : false,
+    )
+  );
+}
+
+function isSameOrdinaryTileFaceValue(left: OrdinaryTileFace, right: OrdinaryTileFace): boolean {
+  return ordinaryTileFaceKey(left) === ordinaryTileFaceKey(right);
 }
 
 function otherPlayers(playerIndex: number, playerCount: number): number[] {

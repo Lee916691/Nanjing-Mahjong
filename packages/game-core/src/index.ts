@@ -12,6 +12,9 @@ export {
 export type {
   DrawTileFromWallResult,
   DrawnTileResolutionResult,
+  DiHuDeclaration,
+  DiHuDeclarationState,
+  DiHuDecisionAvailability,
   FlowerReplacementResult,
   FlowerKongKind,
   FlowerTile,
@@ -128,6 +131,8 @@ export type {
   ReactionAction,
   ReactionResponseType,
   ResolveReactionWindowAction,
+  SubmitDiHuDecisionAction,
+  DiHuDecision,
   SubmitReactionAction,
   StartGameAction,
 } from './actions';
@@ -149,16 +154,23 @@ export {
   requiresFlowerReveal,
   resolveDrawnTileWithFlowerReplacement,
   getAvailableSelfDrawHu,
+  getAvailableDiHuDecision,
 } from './reducer';
 export type { AvailableBuGang, SelfDrawHuAvailability } from './reducer';
 
-export { evaluateHuStructure, ordinaryTileFace, ordinaryTileFaceKey } from './hu';
+export {
+  evaluateHuStructure,
+  getWinningTileFaces,
+  ordinaryTileFace,
+  ordinaryTileFaceKey,
+} from './hu';
 export type {
   DragonSevenPairsHuStructure,
   HuConcealedMeld,
   HuSequence,
   HuStructure,
   HuStructureInput,
+  WinningTileFacesInput,
   HuTriplet,
   SevenPairsHuStructure,
   StandardHuStructure,

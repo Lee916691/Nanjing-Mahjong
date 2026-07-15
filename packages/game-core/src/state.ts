@@ -110,8 +110,12 @@ export function isSameOrdinaryTileFace(left: OrdinaryHandTile, right: OrdinaryHa
 
 export type GamePhase = 'ready' | 'playing' | 'ended';
 export type TurnStage =
-  'waiting-for-draw' | 'waiting-for-discard' | 'waiting-for-reaction' | 'hand-ended';
-export type PendingActionType = 'draw' | 'discard' | 'reaction' | 'none';
+  | 'waiting-for-draw'
+  | 'waiting-for-discard'
+  | 'waiting-for-reaction'
+  | 'waiting-for-di-hu-decision'
+  | 'hand-ended';
+export type PendingActionType = 'draw' | 'discard' | 'reaction' | 'di-hu-decision' | 'none';
 
 export interface PendingAction {
   readonly playerIndex: number | null;
@@ -298,6 +302,7 @@ export type HuPattern =
   | 'dragon-seven-pairs'
   | 'no-flower'
   | 'pressure-absolute'
+  | 'di-hu'
   | 'tian-hu'
   | 'hua-kai'
   | 'gang-kai';
@@ -407,6 +412,27 @@ export interface HandProgressFacts {
   readonly fourWindsGatheredCount: number;
 }
 
+export interface DiHuDeclaration {
+  readonly playerIndex: number;
+  readonly winningTileFaces: readonly OrdinaryTileFace[];
+}
+
+export type DiHuDeclarationState =
+  | {
+      readonly status: 'collecting';
+      readonly pendingPlayerIndices: readonly number[];
+      readonly declarations: readonly DiHuDeclaration[];
+    }
+  | {
+      readonly status: 'closed';
+      readonly declarations: readonly DiHuDeclaration[];
+    };
+
+export interface DiHuDecisionAvailability {
+  readonly playerIndex: number;
+  readonly decisions: readonly ['declare', 'pass'];
+}
+
 export interface GameState {
   readonly nextMeldSequence: number;
   ruleSetId: RuleSetId;
@@ -422,6 +448,7 @@ export interface GameState {
   pendingScoringEvents: readonly PendingScoringEvent[];
   handProgressFacts: HandProgressFacts;
   specialDiscardTracking: SpecialDiscardTrackingState;
+  diHuDeclarations?: DiHuDeclarationState;
   selfDrawProvenance?: SelfDrawProvenance;
   result?: HandResult;
 }
