@@ -12,6 +12,7 @@ import type {
 } from './actions';
 import {
   getWinningTileFaces,
+  isValidHuEvaluation,
   isValidMeld,
   isValidOrdinaryTileFace as isValidOrdinaryTileFaceShape,
   ordinaryTileFaceKey,
@@ -51,6 +52,7 @@ import type {
   PendingAction,
   PendingScoringEvent,
   PendingSpecialDiscardScoringEvent,
+  ReactionAvailability,
   ReactionResponse,
   ReactionWindow,
   ScoringEventCreationStage,
@@ -61,6 +63,9 @@ import type {
   SelfDrawSource,
   SpecialDiscardTrackingState,
   TileWall,
+  ThreeMouthPlayerState,
+  ThreeMouthHuResolution,
+  ThreeMouthState,
   WindTile,
 } from './state';
 
@@ -81,6 +86,7 @@ export type {
 } from './actions';
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
+  if (validThreeMouthState(state) === null) return state;
   if (action.type !== 'START_GAME' && validGangPackageState(state) === null) return state;
   switch (action.type) {
     case 'START_GAME':
@@ -189,6 +195,7 @@ export type SelfDrawHuAvailability = {
   readonly playerIndex: number;
   readonly winningTile: OrdinaryHandTile;
   readonly evaluation: HuEvaluation;
+  readonly threeMouthResolution?: ThreeMouthHuResolution;
 } & (
   | { readonly drawSource: Exclude<SelfDrawSource, 'flower-replacement'> }
   | {
@@ -215,12 +222,18 @@ export function getAvailableSelfDrawHu(
         evaluation: candidate.evaluation,
         drawSource: candidate.drawSource,
         formedFlowerKongDuringReplacement: candidate.formedFlowerKongDuringReplacement,
+        ...(candidate.threeMouthResolution
+          ? { threeMouthResolution: candidate.threeMouthResolution }
+          : {}),
       }
     : {
         playerIndex: candidate.playerIndex,
         winningTile: candidate.winningTile,
         evaluation: candidate.evaluation,
         drawSource: candidate.drawSource,
+        ...(candidate.threeMouthResolution
+          ? { threeMouthResolution: candidate.threeMouthResolution }
+          : {}),
       };
 }
 
@@ -240,24 +253,74 @@ export function declareSelfDrawHuReducer(
           formedFlowerKongDuringReplacement: candidate.formedFlowerKongDuringReplacement,
         }
       : { drawSource: candidate.drawSource };
-  const baseTransfers = ruleSet.getHuScoreTransfers({
-    source: 'self-draw',
-    winnerPlayerIndex: action.playerIndex,
-    playerCount: state.players.length,
-    evaluation: candidate.evaluation,
-    ...sourceDetails,
-  });
-  if (!isValidBaseSelfDrawTransfers(baseTransfers, action.playerIndex, state.players.length)) {
+  const forcedResolution = candidate.threeMouthResolution
+    ? ruleSet.getThreeMouthForcedHuResolution({
+        source: 'self-draw',
+        winnerPlayerIndex: action.playerIndex,
+        payerPlayerIndex: candidate.threeMouthResolution.payerPlayerIndex,
+        playerCount: state.players.length,
+        winningTile: candidate.winningTile,
+        concealedTiles: candidate.concealedTiles,
+        melds: state.players[action.playerIndex]!.melds,
+        flowers: state.players[action.playerIndex]!.flowers,
+        allMelds: state.players.flatMap((player) => player.melds),
+        dealerIndex: state.dealerIndex,
+        diHuDeclaration: diHuDeclarationFor(state, action.playerIndex) ?? undefined,
+        trigger: candidate.threeMouthResolution.triggerSource,
+        forcedBasePattern: candidate.threeMouthResolution.forcedBasePattern,
+        ...sourceDetails,
+      })
+    : null;
+  if (
+    candidate.threeMouthResolution &&
+    (!forcedResolution ||
+      !sameThreeMouthResolution(
+        forcedResolution.threeMouthResolution,
+        candidate.threeMouthResolution,
+      ) ||
+      !sameHuEvaluation(forcedResolution.evaluation, candidate.evaluation))
+  )
+    return state;
+  const baseTransfers =
+    forcedResolution?.transfers ??
+    ruleSet.getHuScoreTransfers({
+      source: 'self-draw',
+      winnerPlayerIndex: action.playerIndex,
+      playerCount: state.players.length,
+      evaluation: candidate.evaluation,
+      ...sourceDetails,
+    });
+  if (
+    candidate.threeMouthResolution
+      ? !isValidThreeMouthTransfers(
+          baseTransfers,
+          candidate.threeMouthResolution.payerPlayerIndex,
+          action.playerIndex,
+          state.players.length,
+        )
+      : !isValidBaseSelfDrawTransfers(baseTransfers, action.playerIndex, state.players.length)
+  ) {
     return state;
   }
-  const transfers = redirectTransfersForGangPackage(
-    baseTransfers,
-    gangPackage,
-    state.players.length,
-  );
+  const transfers = candidate.threeMouthResolution
+    ? isValidThreeMouthTransfers(
+        baseTransfers,
+        candidate.threeMouthResolution.payerPlayerIndex,
+        action.playerIndex,
+        state.players.length,
+      )
+      ? baseTransfers.map((transfer) => ({ ...transfer }))
+      : null
+    : redirectTransfersForGangPackage(baseTransfers, gangPackage, state.players.length);
   if (!transfers) return state;
-  const isPackageSettlement = gangPackage.status === 'active';
-  const winner = { playerIndex: action.playerIndex, evaluation: candidate.evaluation };
+  const isPackageSettlement = !!candidate.threeMouthResolution || gangPackage.status === 'active';
+  const winner = {
+    playerIndex: action.playerIndex,
+    evaluation: candidate.evaluation,
+    ...(candidate.threeMouthResolution
+      ? { threeMouthResolution: candidate.threeMouthResolution }
+      : {}),
+  };
   const nextState: GameState = {
     ...copyGameState(state),
     phase: 'ended',
@@ -271,10 +334,16 @@ export function declareSelfDrawHuReducer(
         type: 'hu-resolved',
         source: 'self-draw',
         winnerPlayerIndex: action.playerIndex,
+        ...(candidate.threeMouthResolution
+          ? { payerPlayerIndex: candidate.threeMouthResolution.payerPlayerIndex }
+          : {}),
         winningTile: candidate.winningTile,
         evaluation: candidate.evaluation,
         transfers,
         status: 'pending',
+        ...(candidate.threeMouthResolution
+          ? { threeMouthResolution: candidate.threeMouthResolution }
+          : {}),
         ...sourceDetails,
       },
     ],
@@ -296,6 +365,9 @@ export function declareSelfDrawHuReducer(
       source: 'self-draw',
       winningTile: candidate.winningTile,
       winner,
+      ...(candidate.threeMouthResolution
+        ? { payerPlayerIndex: candidate.threeMouthResolution.payerPlayerIndex }
+        : {}),
       ...sourceDetails,
     },
   };
@@ -313,6 +385,8 @@ export function getAvailableBuGangs(state: GameState, playerIndex: number): Avai
 }
 
 export function getAvailableAnGangs(state: GameState, playerIndex: number): OrdinaryTileFace[] {
+  const threeMouthState = validThreeMouthState(state);
+  if (!threeMouthState || threeMouthState[playerIndex]?.status === 'active') return [];
   if (validGangPackageState(state) === null) return [];
   if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return [];
   if (!isAnGangTurn(state, playerIndex)) return [];
@@ -338,6 +412,8 @@ export function getAvailableAnGangs(state: GameState, playerIndex: number): Ordi
 }
 
 export function declareAnGangReducer(state: GameState, action: DeclareAnGangAction): GameState {
+  const threeMouthState = validThreeMouthState(state);
+  if (!threeMouthState) return state;
   if (
     !Number.isInteger(state.nextMeldSequence) ||
     state.nextMeldSequence <= 0 ||
@@ -447,6 +523,7 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
       scoringEvents,
       pendingScoringEvents,
     ),
+    threeMouthState: advanceThreeMouthForAnGang(threeMouthState, action.playerIndex),
   };
 
   return drawResolution.status === 'wall-exhausted' ? markHandEnded(nextState) : nextState;
@@ -605,6 +682,7 @@ export function drawReducer(state: GameState): GameState {
     ),
     specialDiscardTracking: state.specialDiscardTracking,
     gangPackage: state.gangPackage,
+    threeMouthState: state.threeMouthState,
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -614,6 +692,8 @@ export function drawReducer(state: GameState): GameState {
 }
 
 export function discardReducer(state: GameState, action: DiscardAction): GameState {
+  const threeMouthState = validThreeMouthState(state);
+  if (!threeMouthState) return state;
   if (state.phase !== 'playing' || state.turnStage !== 'waiting-for-discard') {
     return state;
   }
@@ -707,22 +787,27 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     availableReactions: reactionWindowShell.responderOrder.map(({ playerIndex, seat }) => {
       const responder = players[playerIndex];
       if (!responder) throw new Error(`Invalid reaction responder index ${playerIndex}`);
-      return getRuleSet(state.ruleSetId).getAvailableReactions({
-        source: 'discard',
-        playerCount: players.length,
-        responderPlayerIndex: playerIndex,
-        responderSeat: seat,
-        responderConcealedTiles: responder.hand,
-        responderMelds: responder.melds,
-        responderFlowers: responder.flowers,
-        responderPassHu: responder.passHu,
-        allMelds: players.flatMap((player) => player.melds),
-        dealerIndex: state.dealerIndex,
-        responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
-        fromPlayerIndex: state.currentPlayerIndex,
+      return withActiveThreeMouthSpecialDiscardHu(
+        getRuleSet(state.ruleSetId).getAvailableReactions({
+          source: 'discard',
+          playerCount: players.length,
+          responderPlayerIndex: playerIndex,
+          responderSeat: seat,
+          responderConcealedTiles: responder.hand,
+          responderMelds: responder.melds,
+          responderFlowers: responder.flowers,
+          responderPassHu: responder.passHu,
+          allMelds: players.flatMap((player) => player.melds),
+          dealerIndex: state.dealerIndex,
+          responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
+          fromPlayerIndex: state.currentPlayerIndex,
+          discardedTile,
+          canDrawFromWallTail: state.wall.length > 0,
+        }),
+        threeMouthState[playerIndex],
+        responder,
         discardedTile,
-        canDrawFromWallTail: state.wall.length > 0,
-      });
+      );
     }),
   };
 
@@ -746,6 +831,7 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
       state.gangPackage.beneficiaryPlayerIndex === state.currentPlayerIndex
         ? { status: 'none' }
         : state.gangPackage,
+    threeMouthState,
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -762,6 +848,8 @@ export function submitReactionReducer(
   playerIndex: number,
   responseType: ReactionResponseType,
 ): GameState {
+  const threeMouthState = validThreeMouthState(state);
+  if (!threeMouthState) return state;
   if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return state;
   if (
     state.reactionWindow &&
@@ -797,6 +885,8 @@ export function submitReactionReducer(
 
   if (
     !availability?.responseTypes.includes(responseType) ||
+    (threeMouthState[playerIndex]?.status === 'active' &&
+      (responseType === 'peng' || responseType === 'ming-gang')) ||
     (responseType === 'ming-gang' && state.wall.length === 0)
   ) {
     return state;
@@ -887,7 +977,13 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
   const huResponses = nonPassResponses.filter((response) => response.type === 'hu');
 
   if (huResponses.length > 0) {
-    if (state.gangPackage.status === 'active') {
+    if (
+      state.gangPackage.status === 'active' &&
+      (window.source === 'bu-gang' ||
+        !huResponses.some((response) =>
+          getThreeMouthDiscardResolution(state, window, response.playerIndex),
+        ))
+    ) {
       return window.source === 'bu-gang'
         ? cancelStaleBuGangIntent(state, window)
         : closeDiscardReactionWithoutClaim(state, window);
@@ -919,6 +1015,8 @@ function resolveMingGang(
   window: DiscardReactionWindow,
   response: ReactionResponse,
 ): GameState {
+  const threeMouthState = validThreeMouthState(state);
+  if (!threeMouthState || threeMouthState[response.playerIndex]?.status === 'active') return state;
   const playerIndex = response.playerIndex;
   const player = state.players[playerIndex];
   const discarder = state.players[window.fromPlayerIndex];
@@ -927,22 +1025,25 @@ function resolveMingGang(
   const latestDiscard = discarder?.discardPile.at(-1);
   const currentAvailability =
     player && isOrdinaryHandTile(discardedTile)
-      ? getRuleSet(state.ruleSetId).getAvailableReactions({
-          source: 'discard',
-          playerCount: state.players.length,
-          responderPlayerIndex: playerIndex,
-          responderSeat: player.seat,
-          responderConcealedTiles: player.hand,
-          responderMelds: player.melds,
-          responderFlowers: player.flowers,
-          responderPassHu: player.passHu,
-          allMelds: state.players.flatMap((candidate) => candidate.melds),
-          dealerIndex: state.dealerIndex,
-          responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
-          fromPlayerIndex: window.fromPlayerIndex,
-          discardedTile,
-          canDrawFromWallTail: state.wall.length > 0,
-        })
+      ? withoutActiveThreeMouthClaims(
+          getRuleSet(state.ruleSetId).getAvailableReactions({
+            source: 'discard',
+            playerCount: state.players.length,
+            responderPlayerIndex: playerIndex,
+            responderSeat: player.seat,
+            responderConcealedTiles: player.hand,
+            responderMelds: player.melds,
+            responderFlowers: player.flowers,
+            responderPassHu: player.passHu,
+            allMelds: state.players.flatMap((candidate) => candidate.melds),
+            dealerIndex: state.dealerIndex,
+            responderDiHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
+            fromPlayerIndex: window.fromPlayerIndex,
+            discardedTile,
+            canDrawFromWallTail: state.wall.length > 0,
+          }),
+          threeMouthState[playerIndex],
+        )
       : null;
 
   if (
@@ -1125,6 +1226,11 @@ function resolveMingGang(
     ),
     specialDiscardTracking: trackingAfterSeatClaim(state, playerIndex),
     gangPackage,
+    threeMouthState: advanceThreeMouthForExternalMouth(
+      threeMouthState,
+      playerIndex,
+      window.fromPlayerIndex,
+    ),
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -1138,6 +1244,8 @@ function resolvePeng(
   window: DiscardReactionWindow,
   response: ReactionResponse,
 ): GameState {
+  const threeMouthState = validThreeMouthState(state);
+  if (!threeMouthState || threeMouthState[response.playerIndex]?.status === 'active') return state;
   const pengPlayerIndex = response.playerIndex;
   const pengPlayer = state.players[pengPlayerIndex];
   const discarder = state.players[window.fromPlayerIndex];
@@ -1232,6 +1340,11 @@ function resolvePeng(
     nextMeldSequence: state.nextMeldSequence + 1,
     selfDrawProvenance: undefined,
     specialDiscardTracking: trackingAfterSeatClaim(state, pengPlayerIndex),
+    threeMouthState: advanceThreeMouthForExternalMouth(
+      threeMouthState,
+      pengPlayerIndex,
+      window.fromPlayerIndex,
+    ),
   };
 }
 
@@ -1251,12 +1364,87 @@ function closeDiscardReactionWithoutClaim(
   return state.wall.length === 0 ? markHandEnded(nextState) : nextState;
 }
 
+function getThreeMouthDiscardResolution(
+  state: GameState,
+  window: DiscardReactionWindow,
+  playerIndex: number,
+) {
+  const threeMouthState = validThreeMouthState(state);
+  const active = threeMouthState?.[playerIndex];
+  const player = state.players[playerIndex];
+  const discarder = state.players[window.fromPlayerIndex];
+  const lastDiscard = state.lastDiscard;
+  const latestDiscard = discarder?.discardPile.at(-1);
+  if (
+    active?.status !== 'active' ||
+    !player ||
+    player.passHu ||
+    !hasValidActiveThreeMouthMelds(player, active.payerPlayerIndex) ||
+    !isOrdinaryHandTile(window.discardedTile) ||
+    !discarder ||
+    !lastDiscard ||
+    lastDiscard.tileId !== window.discardedTile.id ||
+    lastDiscard.fromPlayerIndex !== window.fromPlayerIndex ||
+    !latestDiscard ||
+    latestDiscard.tile.id !== window.discardedTile.id ||
+    latestDiscard.claimedByMeldId !== undefined ||
+    !hasValidHuEntities(state.players)
+  )
+    return null;
+  const discardedTile = window.discardedTile;
+  const matching = player.hand.filter((tile) => isSameOrdinaryTileFace(tile, discardedTile));
+  if (
+    matching.length < 2 ||
+    matching.length > 3 ||
+    new Set([...matching.map((tile) => tile.id), discardedTile.id]).size !== matching.length + 1
+  )
+    return null;
+  const trigger =
+    matching.length === 3 && state.wall.length > 0
+      ? ('discard-ming-gang-opportunity' as const)
+      : ('discard-peng-opportunity' as const);
+  const forcedBasePattern =
+    window.fromPlayerIndex === active.payerPlayerIndex
+      ? ('global-single-wait' as const)
+      : ('all-pungs' as const);
+  const resolution = getRuleSet(state.ruleSetId).getThreeMouthForcedHuResolution({
+    source: 'discard',
+    winnerPlayerIndex: playerIndex,
+    payerPlayerIndex: active.payerPlayerIndex,
+    playerCount: state.players.length,
+    winningTile: discardedTile,
+    concealedTiles: player.hand,
+    melds: player.melds,
+    flowers: player.flowers,
+    allMelds: state.players.flatMap((candidate) => candidate.melds),
+    dealerIndex: state.dealerIndex,
+    diHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
+    trigger,
+    forcedBasePattern,
+    discarderPlayerIndex: window.fromPlayerIndex,
+  });
+  return resolution &&
+    resolution.threeMouthResolution.triggerSource === trigger &&
+    resolution.threeMouthResolution.triggerPlayerIndex === window.fromPlayerIndex &&
+    resolution.threeMouthResolution.forcedBasePattern === forcedBasePattern &&
+    resolution.threeMouthResolution.payerPlayerIndex === active.payerPlayerIndex &&
+    resolution.threeMouthResolution.settlementMode === 'self-draw' &&
+    isValidHuEvaluation(resolution.evaluation) &&
+    isValidThreeMouthTransfers(
+      resolution.transfers,
+      active.payerPlayerIndex,
+      playerIndex,
+      state.players.length,
+    )
+    ? resolution
+    : null;
+}
+
 function resolveHu(
   state: GameState,
   window: ReactionWindow,
   huResponses: readonly ReactionResponse[],
 ): GameState {
-  if (state.gangPackage.status === 'active') return state;
   const targetTile =
     window.source === 'discard'
       ? isOrdinaryHandTile(window.discardedTile)
@@ -1277,20 +1465,51 @@ function resolveHu(
       (candidate) => candidate.playerIndex === response.playerIndex,
     );
     if (!player || !availability?.responseTypes.includes('hu')) return null;
-    const evaluation = ruleSet.evaluateHu({
-      source: window.source === 'discard' ? 'discard' : 'rob-bu-gang',
-      winnerPlayerIndex: response.playerIndex,
-      payerPlayerIndex,
-      playerCount: state.players.length,
-      winningTile: targetTile,
-      concealedTiles: player.hand,
-      melds: player.melds,
-      flowers: player.flowers,
-      allMelds: state.players.flatMap((candidate) => candidate.melds),
-      dealerIndex: state.dealerIndex,
-      diHuDeclaration: diHuDeclarationFor(state, response.playerIndex) ?? undefined,
-    });
-    return evaluation ? { playerIndex: response.playerIndex, evaluation } : null;
+    const special =
+      window.source === 'discard'
+        ? getThreeMouthDiscardResolution(state, window, response.playerIndex)
+        : null;
+    const evaluation =
+      special?.evaluation ??
+      ruleSet.evaluateHu({
+        source: window.source === 'discard' ? 'discard' : 'rob-bu-gang',
+        winnerPlayerIndex: response.playerIndex,
+        payerPlayerIndex,
+        playerCount: state.players.length,
+        winningTile: targetTile,
+        concealedTiles: player.hand,
+        melds: player.melds,
+        flowers: player.flowers,
+        allMelds: state.players.flatMap((candidate) => candidate.melds),
+        dealerIndex: state.dealerIndex,
+        diHuDeclaration: diHuDeclarationFor(state, response.playerIndex) ?? undefined,
+      });
+    if (!evaluation) return null;
+    const transfers =
+      special?.transfers ??
+      ruleSet.getHuScoreTransfers({
+        source: window.source === 'discard' ? 'discard' : 'rob-bu-gang',
+        winnerPlayerIndex: response.playerIndex,
+        payerPlayerIndex,
+        playerCount: state.players.length,
+        evaluation,
+      });
+    if (
+      special &&
+      !isValidThreeMouthTransfers(
+        transfers,
+        special.threeMouthResolution.payerPlayerIndex,
+        response.playerIndex,
+        state.players.length,
+      )
+    )
+      return null;
+    return {
+      playerIndex: response.playerIndex,
+      evaluation,
+      transfers,
+      ...(special ? { threeMouthResolution: special.threeMouthResolution } : {}),
+    };
   });
   if (winners.some((winner) => winner === null)) return state;
   const validWinners = winners.filter((winner) => winner !== null);
@@ -1303,18 +1522,11 @@ function resolveHu(
       type: 'hu-resolved' as const,
       source,
       winnerPlayerIndex: winner.playerIndex,
-      payerPlayerIndex,
+      payerPlayerIndex: winner.threeMouthResolution?.payerPlayerIndex ?? payerPlayerIndex,
       winningTile: targetTile,
       evaluation: winner.evaluation,
-      transfers: ruleSet
-        .getHuScoreTransfers({
-          source,
-          winnerPlayerIndex: winner.playerIndex,
-          payerPlayerIndex,
-          playerCount: state.players.length,
-          evaluation: winner.evaluation,
-        })
-        .map((transfer) => ({ ...transfer })),
+      transfers: winner.transfers.map((transfer) => ({ ...transfer })),
+      ...(winner.threeMouthResolution ? { threeMouthResolution: winner.threeMouthResolution } : {}),
       status: 'pending' as const,
     })),
   ];
@@ -1333,6 +1545,12 @@ function resolveHu(
         )
       : state.players;
 
+  const specialWinnerCount = validWinners.filter(
+    (winner) => winner.threeMouthResolution !== undefined,
+  ).length;
+  const specialPayerPlayerIndex = validWinners.find(
+    (winner) => winner.threeMouthResolution !== undefined,
+  )?.threeMouthResolution?.payerPlayerIndex;
   return {
     ...copyGameState(state),
     players: copyPlayers(players),
@@ -1343,6 +1561,16 @@ function resolveHu(
     reactionWindow: { ...window, status: 'closed' },
     pendingScoringEvents,
     selfDrawProvenance: undefined,
+    gangPackage: specialWinnerCount > 0 ? { status: 'none' } : state.gangPackage,
+    handProgressFacts:
+      specialWinnerCount === 0
+        ? state.handProgressFacts
+        : {
+            ...state.handProgressFacts,
+            packageSettlementCount:
+              state.handProgressFacts.packageSettlementCount + specialWinnerCount,
+            selfDrawCount: state.handProgressFacts.selfDrawCount + specialWinnerCount,
+          },
     specialDiscardTracking: {
       ...state.specialDiscardTracking,
       followDiscard: null,
@@ -1351,8 +1579,20 @@ function resolveHu(
       type: 'win',
       source,
       winningTile: targetTile,
-      payerPlayerIndex,
-      winners: validWinners,
+      payerPlayerIndex: specialPayerPlayerIndex ?? payerPlayerIndex,
+      ...(specialPayerPlayerIndex === undefined ? {} : { triggerPlayerIndex: payerPlayerIndex }),
+      winners: validWinners.map((winner) => ({
+        playerIndex: winner.playerIndex,
+        ...(specialWinnerCount > 0
+          ? {
+              payerPlayerIndex: winner.threeMouthResolution?.payerPlayerIndex ?? payerPlayerIndex,
+            }
+          : {}),
+        evaluation: winner.evaluation,
+        ...(winner.threeMouthResolution
+          ? { threeMouthResolution: winner.threeMouthResolution }
+          : {}),
+      })),
     },
   };
 }
@@ -1554,6 +1794,7 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
     gangPackage: { status: 'none' },
+    threeMouthState: createInitialThreeMouthState(),
     diHuDeclarations: { status: 'closed', declarations: [] },
   };
 }
@@ -1585,6 +1826,7 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
     gangPackage: { status: 'none' },
+    threeMouthState: createInitialThreeMouthState(),
     diHuDeclarations: { status: 'closed', declarations: [] },
   });
 }
@@ -2064,6 +2306,167 @@ function trackingAfterSeatClaim(state: GameState, claimantPlayerIndex: number) {
     : { ...state.specialDiscardTracking, followDiscard: null };
 }
 
+function createInitialThreeMouthState(): ThreeMouthState {
+  const initial = (): ThreeMouthPlayerState => ({
+    status: 'tracking',
+    mouthCount: 0,
+    lockedPayerPlayerIndex: null,
+  });
+  return [initial(), initial(), initial(), initial()];
+}
+
+function validThreeMouthState(state: unknown): ThreeMouthState | null {
+  if (!isRecord(state) || !Array.isArray(state.players) || state.players.length !== 4) return null;
+  const value = state.threeMouthState;
+  if (!Array.isArray(value) || value.length !== 4) return null;
+  const result: ThreeMouthPlayerState[] = [];
+  for (let beneficiaryPlayerIndex = 0; beneficiaryPlayerIndex < 4; beneficiaryPlayerIndex += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, beneficiaryPlayerIndex)) return null;
+    const playerState = value[beneficiaryPlayerIndex];
+    if (!isRecord(playerState)) return null;
+    if (playerState.status === 'tracking') {
+      if (
+        !hasOnlyKeys(playerState, ['status', 'mouthCount', 'lockedPayerPlayerIndex']) ||
+        (playerState.mouthCount !== 0 &&
+          playerState.mouthCount !== 1 &&
+          playerState.mouthCount !== 2) ||
+        (playerState.lockedPayerPlayerIndex !== null &&
+          (!isPlayerIndexValue(playerState.lockedPayerPlayerIndex, 4) ||
+            playerState.lockedPayerPlayerIndex === beneficiaryPlayerIndex)) ||
+        (playerState.mouthCount === 0 && playerState.lockedPayerPlayerIndex !== null)
+      ) {
+        return null;
+      }
+      result.push(playerState as ThreeMouthPlayerState);
+      continue;
+    }
+    if (playerState.status === 'active') {
+      if (
+        !hasOnlyKeys(playerState, ['status', 'payerPlayerIndex']) ||
+        !isPlayerIndexValue(playerState.payerPlayerIndex, 4) ||
+        playerState.payerPlayerIndex === beneficiaryPlayerIndex
+      ) {
+        return null;
+      }
+      result.push(playerState as ThreeMouthPlayerState);
+      continue;
+    }
+    if (playerState.status !== 'invalid' || !hasOnlyKeys(playerState, ['status'])) return null;
+    result.push(playerState as ThreeMouthPlayerState);
+  }
+  return [result[0]!, result[1]!, result[2]!, result[3]!];
+}
+
+function withoutActiveThreeMouthClaims(
+  availability: ReactionAvailability,
+  playerState: ThreeMouthPlayerState | undefined,
+): ReactionAvailability {
+  return playerState?.status === 'active'
+    ? {
+        ...availability,
+        responseTypes: availability.responseTypes.filter(
+          (type) => type !== 'peng' && type !== 'ming-gang',
+        ),
+      }
+    : availability;
+}
+
+function withActiveThreeMouthSpecialDiscardHu(
+  availability: ReactionAvailability,
+  playerState: ThreeMouthPlayerState | undefined,
+  responder: PlayerState,
+  discardedTile: OrdinaryHandTile,
+): ReactionAvailability {
+  if (playerState?.status !== 'active') return availability;
+  if (!hasValidActiveThreeMouthMelds(responder, playerState.payerPlayerIndex)) {
+    return { ...availability, responseTypes: ['pass'] };
+  }
+  const matching = responder.hand.filter((tile) => isSameOrdinaryTileFace(tile, discardedTile));
+  const hasOpportunity =
+    matching.length >= 2 &&
+    matching.length <= 3 &&
+    new Set(matching.map((tile) => tile.id)).size === matching.length;
+  const responseTypes: ReactionResponseType[] = availability.responseTypes.filter(
+    (type) => type !== 'peng' && type !== 'ming-gang' && type !== 'hu',
+  );
+  if (hasOpportunity && !responder.passHu) responseTypes.push('hu');
+  return { ...availability, responseTypes };
+}
+
+function hasValidActiveThreeMouthMelds(player: PlayerState, payerPlayerIndex: number): boolean {
+  return (
+    player.melds.length === 3 &&
+    player.melds.every(isValidMeld) &&
+    player.melds.some(
+      (meld) => meld.type !== 'an-gang' && meld.fromPlayerIndex === payerPlayerIndex,
+    )
+  );
+}
+
+function advanceThreeMouthForExternalMouth(
+  state: ThreeMouthState,
+  beneficiaryPlayerIndex: number,
+  sourcePlayerIndex: number,
+): ThreeMouthState {
+  if (
+    !isPlayerIndexValue(beneficiaryPlayerIndex, 4) ||
+    !isPlayerIndexValue(sourcePlayerIndex, 4) ||
+    beneficiaryPlayerIndex === sourcePlayerIndex
+  ) {
+    return state;
+  }
+  const current = state[beneficiaryPlayerIndex];
+  if (!current || current.status !== 'tracking') return state;
+  if (
+    current.lockedPayerPlayerIndex !== null &&
+    current.lockedPayerPlayerIndex !== sourcePlayerIndex
+  ) {
+    return replaceThreeMouthPlayerState(state, beneficiaryPlayerIndex, { status: 'invalid' });
+  }
+  const next =
+    current.mouthCount === 2
+      ? ({ status: 'active', payerPlayerIndex: sourcePlayerIndex } as const)
+      : ({
+          status: 'tracking',
+          mouthCount: current.mouthCount === 0 ? 1 : 2,
+          lockedPayerPlayerIndex: sourcePlayerIndex,
+        } as const);
+  return replaceThreeMouthPlayerState(state, beneficiaryPlayerIndex, next);
+}
+
+function advanceThreeMouthForAnGang(state: ThreeMouthState, playerIndex: number): ThreeMouthState {
+  if (!isPlayerIndexValue(playerIndex, 4)) return state;
+  const current = state[playerIndex];
+  if (!current || current.status !== 'tracking') return state;
+  if (current.mouthCount === 2) {
+    return replaceThreeMouthPlayerState(
+      state,
+      playerIndex,
+      current.lockedPayerPlayerIndex === null
+        ? { status: 'invalid' }
+        : { status: 'active', payerPlayerIndex: current.lockedPayerPlayerIndex },
+    );
+  }
+  return replaceThreeMouthPlayerState(state, playerIndex, {
+    status: 'tracking',
+    mouthCount: current.mouthCount === 0 ? 1 : 2,
+    lockedPayerPlayerIndex: current.lockedPayerPlayerIndex,
+  });
+}
+
+function replaceThreeMouthPlayerState(
+  state: ThreeMouthState,
+  playerIndex: number,
+  playerState: ThreeMouthPlayerState,
+): ThreeMouthState {
+  return [
+    playerIndex === 0 ? playerState : state[0],
+    playerIndex === 1 ? playerState : state[1],
+    playerIndex === 2 ? playerState : state[2],
+    playerIndex === 3 ? playerState : state[3],
+  ];
+}
+
 function isValidGeneratedTransfers(
   transfers: readonly ScoreTransfer[],
   playerCount: number,
@@ -2468,6 +2871,12 @@ function copyGameState(state: GameState): GameState {
       })),
     },
     gangPackage: { ...state.gangPackage },
+    threeMouthState: [
+      { ...state.threeMouthState[0] },
+      { ...state.threeMouthState[1] },
+      { ...state.threeMouthState[2] },
+      { ...state.threeMouthState[3] },
+    ],
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -2793,6 +3202,60 @@ function validSelfDrawHuCandidate(
           formedFlowerKongDuringReplacement: provenance.formedFlowerKongDuringReplacement,
         }
       : { drawSource: provenance.source };
+  const threeMouthState = validThreeMouthState(state);
+  const active = threeMouthState?.[playerIndex];
+  if (active?.status === 'active') {
+    if (!hasValidActiveThreeMouthMelds(player, active.payerPlayerIndex)) return null;
+    const matching = player.hand.filter((tile) => isSameOrdinaryTileFace(tile, winningTile));
+    if (
+      matching.length === 4 &&
+      new Set(matching.map((tile) => tile.id)).size === 4 &&
+      concealedTiles.filter((tile) => isSameOrdinaryTileFace(tile, winningTile)).length === 3
+    ) {
+      const forced = getRuleSet(state.ruleSetId).getThreeMouthForcedHuResolution({
+        source: 'self-draw',
+        winnerPlayerIndex: playerIndex,
+        payerPlayerIndex: active.payerPlayerIndex,
+        playerCount: state.players.length,
+        winningTile,
+        concealedTiles,
+        melds: player.melds,
+        flowers: player.flowers,
+        allMelds: state.players.flatMap((candidate) => candidate.melds),
+        dealerIndex: state.dealerIndex,
+        diHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
+        trigger: 'self-draw-an-gang-opportunity',
+        forcedBasePattern: 'global-single-wait',
+        ...sourceDetails,
+      });
+      if (
+        forced &&
+        isValidHuEvaluation(forced.evaluation) &&
+        forced.threeMouthResolution.triggerSource === 'self-draw-an-gang-opportunity' &&
+        forced.threeMouthResolution.triggerPlayerIndex === playerIndex &&
+        forced.threeMouthResolution.forcedBasePattern === 'global-single-wait' &&
+        forced.threeMouthResolution.payerPlayerIndex === active.payerPlayerIndex &&
+        forced.threeMouthResolution.settlementMode === 'self-draw' &&
+        isValidThreeMouthTransfers(
+          forced.transfers,
+          active.payerPlayerIndex,
+          playerIndex,
+          state.players.length,
+        )
+      ) {
+        const candidate = {
+          playerIndex,
+          winningTile,
+          concealedTiles,
+          evaluation: forced.evaluation,
+          threeMouthResolution: forced.threeMouthResolution,
+          ...sourceDetails,
+        };
+        return isApplicableGangPackageSelfDraw(state, candidate) ? candidate : null;
+      }
+      return null;
+    }
+  }
   const evaluation = getRuleSet(state.ruleSetId).evaluateHu({
     source: 'self-draw',
     winnerPlayerIndex: playerIndex,
@@ -2817,6 +3280,7 @@ function isApplicableGangPackageSelfDraw(
 ): boolean {
   const gangPackage = validGangPackageState(state);
   if (!gangPackage) return false;
+  if (candidate.threeMouthResolution) return true;
   if (gangPackage.status === 'none') return true;
   if (
     candidate.playerIndex !== gangPackage.beneficiaryPlayerIndex ||
@@ -2865,6 +3329,43 @@ function isValidBaseSelfDrawTransfers(
     amounts.add(transfer.amount);
   }
   return payers.size === playerCount - 1 && amounts.size === 1;
+}
+
+function isValidThreeMouthTransfers(
+  transfers: unknown,
+  payerPlayerIndex: number,
+  winnerPlayerIndex: number,
+  playerCount: number,
+): transfers is readonly ScoreTransfer[] {
+  if (!Array.isArray(transfers) || transfers.length !== playerCount - 1) return false;
+  let amount: number | null = null;
+  return transfers.every((transfer) => {
+    if (
+      !isValidScoreTransfer(transfer, playerCount) ||
+      transfer.fromPlayerIndex !== payerPlayerIndex ||
+      transfer.toPlayerIndex !== winnerPlayerIndex
+    )
+      return false;
+    if (amount === null) amount = transfer.amount;
+    return transfer.amount === amount;
+  });
+}
+
+function sameThreeMouthResolution(
+  left: ThreeMouthHuResolution,
+  right: ThreeMouthHuResolution,
+): boolean {
+  return (
+    left.triggerSource === right.triggerSource &&
+    left.triggerPlayerIndex === right.triggerPlayerIndex &&
+    left.settlementMode === right.settlementMode &&
+    left.forcedBasePattern === right.forcedBasePattern &&
+    left.payerPlayerIndex === right.payerPlayerIndex
+  );
+}
+
+function sameHuEvaluation(left: HuEvaluation, right: HuEvaluation): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function isSafeSelfDrawCandidateState(value: unknown, playerIndex: number): value is GameState {

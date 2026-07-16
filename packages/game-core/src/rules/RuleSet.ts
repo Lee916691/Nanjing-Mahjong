@@ -14,7 +14,9 @@ import type {
   OrdinaryTileFace,
   SelfDrawSource,
   Tile,
+  ThreeMouthHuResolution,
 } from '../state';
+import type { ThreeMouthSpecialHuTrigger } from '../hu';
 import type { WindTileKind } from '../state';
 
 export type RuleSetId = 'nanjing-open';
@@ -142,6 +144,29 @@ export type HuScoringContext = HuScoringContextBase &
       }
   );
 
+export type ThreeMouthForcedHuContext = HuContextBase & {
+  readonly payerPlayerIndex: number;
+  readonly trigger: ThreeMouthSpecialHuTrigger;
+  readonly forcedBasePattern: 'all-pungs' | 'global-single-wait';
+} & (
+    | { readonly source: 'discard'; readonly discarderPlayerIndex: number }
+    | {
+        readonly source: 'self-draw';
+        readonly drawSource: Exclude<SelfDrawSource, 'flower-replacement'>;
+      }
+    | {
+        readonly source: 'self-draw';
+        readonly drawSource: 'flower-replacement';
+        readonly formedFlowerKongDuringReplacement: boolean;
+      }
+  );
+
+export interface ThreeMouthForcedHuResolution {
+  readonly evaluation: HuEvaluation;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly threeMouthResolution: ThreeMouthHuResolution;
+}
+
 export interface RuleSet {
   readonly id: RuleSetId;
   readonly displayName: string;
@@ -157,6 +182,9 @@ export interface RuleSet {
   ) => readonly ScoreTransfer[];
   readonly evaluateHu: (context: HuEvaluationContext) => HuEvaluation | null;
   readonly getHuScoreTransfers: (context: HuScoringContext) => readonly ScoreTransfer[];
+  readonly getThreeMouthForcedHuResolution: (
+    context: ThreeMouthForcedHuContext,
+  ) => ThreeMouthForcedHuResolution | null;
   readonly getFlowerKongScoreTransfers: (
     context: FlowerKongScoringContext,
   ) => readonly ScoreTransfer[];

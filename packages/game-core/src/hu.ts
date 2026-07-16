@@ -39,7 +39,19 @@ export interface DragonSevenPairsHuStructure {
   readonly dragon: OrdinaryTileFace;
 }
 
-export type HuStructure = StandardHuStructure | SevenPairsHuStructure | DragonSevenPairsHuStructure;
+export type ThreeMouthSpecialHuTrigger =
+  'discard-peng-opportunity' | 'discard-ming-gang-opportunity' | 'self-draw-an-gang-opportunity';
+
+export interface ThreeMouthForcedHuStructure {
+  readonly type: 'three-mouth-forced';
+  readonly trigger: ThreeMouthSpecialHuTrigger;
+}
+
+export type HuStructure =
+  | StandardHuStructure
+  | SevenPairsHuStructure
+  | DragonSevenPairsHuStructure
+  | ThreeMouthForcedHuStructure;
 
 const FACE_KEYS = [
   ...NUMBER_TILE_SUITS.flatMap((suit) => NUMBER_TILE_RANKS.map((rank) => `${suit}-${rank}`)),
@@ -233,6 +245,14 @@ const HU_PATTERNS: readonly HuPattern[] = [
 
 export function isValidHuStructure(value: unknown): value is HuStructure {
   if (!isRecord(value)) return false;
+  if (value.type === 'three-mouth-forced') {
+    return (
+      hasExactKeys(value, ['type', 'trigger']) &&
+      (value.trigger === 'discard-peng-opportunity' ||
+        value.trigger === 'discard-ming-gang-opportunity' ||
+        value.trigger === 'self-draw-an-gang-opportunity')
+    );
+  }
   if (value.type === 'standard') {
     if (
       value.pairs !== undefined ||
@@ -309,6 +329,30 @@ export function isValidHuEvaluation(value: unknown): value is HuEvaluation {
     value.isBiXiaHu === undefined
   ))
     return false;
+  if (value.structure.type === 'three-mouth-forced') {
+    const forcedPattern = value.patterns.includes('global-single-wait')
+      ? 'global-single-wait'
+      : value.patterns.includes('all-pungs')
+        ? 'all-pungs'
+        : null;
+    if (
+      !forcedPattern ||
+      (forcedPattern === 'global-single-wait' && value.patterns.includes('all-pungs'))
+    ) {
+      return false;
+    }
+    const allowed = new Set<HuPattern>([
+      'men-qing',
+      forcedPattern,
+      'mixed-one-suit',
+      'pure-one-suit',
+      'no-flower',
+      'di-hu',
+      'hua-kai',
+      'gang-kai',
+    ]);
+    if (value.patterns.some((pattern) => !allowed.has(pattern))) return false;
+  }
   return (
     !value.patterns.includes('tian-hu') ||
     (value.patterns.length === 1 && value.hardFlowerCount === 0 && value.softFlowerCount === 0)
@@ -343,13 +387,28 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
     return false;
   }
   if (value.source === 'self-draw') {
+    const forced =
+      value.winner && isRecord(value.winner)
+        ? isRecord(value.winner.evaluation) &&
+          isRecord(value.winner.evaluation.structure) &&
+          value.winner.evaluation.structure.type === 'three-mouth-forced'
+        : false;
     return (
-      value.payerPlayerIndex === undefined &&
+      (forced
+        ? isPlayerIndex(value.payerPlayerIndex, playerCount)
+        : value.payerPlayerIndex === undefined) &&
       value.winners === undefined &&
       value.selfDrawProvenance === undefined &&
       isRecord(value.winner) &&
       isPlayerIndex(value.winner.playerIndex, playerCount) &&
       isValidHuEvaluation(value.winner.evaluation) &&
+      hasValidThreeMouthMetadata(
+        value.winner,
+        value.winner.evaluation,
+        playerCount,
+        'self-draw',
+        value.payerPlayerIndex,
+      ) &&
       value.winner.transfers === undefined &&
       isValidSelfDrawSourceSummary(value)
     );
@@ -365,13 +424,42 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
   )
     return false;
   const payerPlayerIndex = value.payerPlayerIndex;
+  const hasForcedWinner = value.winners.some(
+    (winner) =>
+      isRecord(winner) &&
+      isRecord(winner.evaluation) &&
+      isRecord(winner.evaluation.structure) &&
+      winner.evaluation.structure.type === 'three-mouth-forced',
+  );
+  if (
+    hasForcedWinner !== isPlayerIndex(value.triggerPlayerIndex, playerCount) ||
+    (hasForcedWinner && value.triggerPlayerIndex === payerPlayerIndex)
+  )
+    return false;
+  const orderingOriginPlayerIndex =
+    hasForcedWinner && typeof value.triggerPlayerIndex === 'number'
+      ? value.triggerPlayerIndex
+      : payerPlayerIndex;
   const indexes: number[] = [];
   for (const winner of value.winners) {
+    const winnerPayerPlayerIndex = isRecord(winner)
+      ? (winner.payerPlayerIndex ?? payerPlayerIndex)
+      : payerPlayerIndex;
     if (
       !isRecord(winner) ||
       !isPlayerIndex(winner.playerIndex, playerCount) ||
-      winner.playerIndex === payerPlayerIndex ||
+      !isPlayerIndex(winnerPayerPlayerIndex, playerCount) ||
+      winner.playerIndex === winnerPayerPlayerIndex ||
+      (!hasForcedWinner && winner.payerPlayerIndex !== undefined) ||
+      (hasForcedWinner && winner.payerPlayerIndex === undefined) ||
       !isValidHuEvaluation(winner.evaluation) ||
+      !hasValidThreeMouthMetadata(
+        winner,
+        winner.evaluation,
+        playerCount,
+        value.source,
+        winnerPayerPlayerIndex,
+      ) ||
       winner.transfers !== undefined
     ) {
       return false;
@@ -382,8 +470,8 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
   return indexes.every(
     (index, position) =>
       position === 0 ||
-      clockwiseDistance(payerPlayerIndex, indexes[position - 1]!, playerCount) <
-        clockwiseDistance(payerPlayerIndex, index, playerCount),
+      clockwiseDistance(orderingOriginPlayerIndex, indexes[position - 1]!, playerCount) <
+        clockwiseDistance(orderingOriginPlayerIndex, index, playerCount),
   );
 }
 
@@ -401,12 +489,22 @@ export function isValidPendingHuScoringEvent(
   )
     return false;
   if (value.source === 'self-draw') {
+    const forced = value.evaluation.structure.type === 'three-mouth-forced';
     return (
-      value.payerPlayerIndex === undefined &&
+      (forced
+        ? isPlayerIndex(value.payerPlayerIndex, playerCount)
+        : value.payerPlayerIndex === undefined) &&
       value.winner === undefined &&
       value.winners === undefined &&
       value.amount === undefined &&
       value.multiplier === undefined &&
+      hasValidThreeMouthMetadata(
+        value,
+        value.evaluation,
+        playerCount,
+        'self-draw',
+        value.payerPlayerIndex,
+      ) &&
       isValidSelfDrawSourceSummary(value)
     );
   }
@@ -417,7 +515,63 @@ export function isValidPendingHuScoringEvent(
     value.winner === undefined &&
     value.winners === undefined &&
     isPlayerIndex(value.payerPlayerIndex, playerCount) &&
-    value.winnerPlayerIndex !== value.payerPlayerIndex
+    value.winnerPlayerIndex !== value.payerPlayerIndex &&
+    hasValidThreeMouthMetadata(
+      value,
+      value.evaluation,
+      playerCount,
+      value.source,
+      value.payerPlayerIndex,
+    )
+  );
+}
+
+function hasValidThreeMouthMetadata(
+  value: Record<string, unknown>,
+  evaluation: HuEvaluation,
+  playerCount: number,
+  source: 'discard' | 'rob-bu-gang' | 'self-draw',
+  topLevelPayerPlayerIndex: unknown,
+): boolean {
+  const metadata = value.threeMouthResolution;
+  if (evaluation.structure.type !== 'three-mouth-forced') return metadata === undefined;
+  if (!isRecord(metadata) || source === 'rob-bu-gang') return false;
+  const expectedTrigger = evaluation.structure.trigger;
+  const forcedBasePattern = evaluation.patterns.includes('global-single-wait')
+    ? 'global-single-wait'
+    : evaluation.patterns.includes('all-pungs')
+      ? 'all-pungs'
+      : null;
+  const winnerPlayerIndex =
+    typeof value.playerIndex === 'number'
+      ? value.playerIndex
+      : typeof value.winnerPlayerIndex === 'number'
+        ? value.winnerPlayerIndex
+        : null;
+  return (
+    hasExactKeys(metadata, [
+      'triggerSource',
+      'triggerPlayerIndex',
+      'settlementMode',
+      'forcedBasePattern',
+      'payerPlayerIndex',
+    ]) &&
+    metadata.triggerSource === expectedTrigger &&
+    isPlayerIndex(metadata.triggerPlayerIndex, playerCount) &&
+    metadata.settlementMode === 'self-draw' &&
+    metadata.forcedBasePattern === forcedBasePattern &&
+    isPlayerIndex(metadata.payerPlayerIndex, playerCount) &&
+    metadata.payerPlayerIndex === topLevelPayerPlayerIndex &&
+    metadata.payerPlayerIndex !== winnerPlayerIndex &&
+    (source === 'self-draw'
+      ? expectedTrigger === 'self-draw-an-gang-opportunity' &&
+        metadata.triggerPlayerIndex === winnerPlayerIndex &&
+        forcedBasePattern === 'global-single-wait'
+      : (expectedTrigger === 'discard-peng-opportunity' ||
+          expectedTrigger === 'discard-ming-gang-opportunity') &&
+        metadata.triggerPlayerIndex !== winnerPlayerIndex &&
+        (forcedBasePattern === 'global-single-wait') ===
+          (metadata.triggerPlayerIndex === metadata.payerPlayerIndex))
   );
 }
 

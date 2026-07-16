@@ -1,5 +1,6 @@
 import type { ReactionResponseType } from './actions';
 import type { HuStructure } from './hu';
+import type { ThreeMouthSpecialHuTrigger } from './hu';
 import type { PlayerState } from './player';
 import type { RuleSetId } from './rules/RuleSet';
 
@@ -314,6 +315,14 @@ export interface HuEvaluation {
   readonly softFlowerCount: number;
 }
 
+export interface ThreeMouthHuResolution {
+  readonly triggerSource: ThreeMouthSpecialHuTrigger;
+  readonly triggerPlayerIndex: number;
+  readonly settlementMode: 'self-draw';
+  readonly forcedBasePattern: 'all-pungs' | 'global-single-wait';
+  readonly payerPlayerIndex: number;
+}
+
 export interface PendingSinglePayerHuScoringEvent {
   readonly type: 'hu-resolved';
   readonly source: 'discard' | 'rob-bu-gang';
@@ -321,6 +330,7 @@ export interface PendingSinglePayerHuScoringEvent {
   readonly payerPlayerIndex: number;
   readonly winningTile: OrdinaryHandTile;
   readonly evaluation: HuEvaluation;
+  readonly threeMouthResolution?: ThreeMouthHuResolution;
   readonly transfers: readonly ScoreTransfer[];
   readonly status: 'pending';
 }
@@ -329,8 +339,10 @@ export type PendingSelfDrawHuScoringEvent = {
   readonly type: 'hu-resolved';
   readonly source: 'self-draw';
   readonly winnerPlayerIndex: number;
+  readonly payerPlayerIndex?: number;
   readonly winningTile: OrdinaryHandTile;
   readonly evaluation: HuEvaluation;
+  readonly threeMouthResolution?: ThreeMouthHuResolution;
   readonly transfers: readonly ScoreTransfer[];
   readonly status: 'pending';
 } & (
@@ -370,7 +382,9 @@ export interface DrawHandResult {
 
 export interface WinHandWinner {
   readonly playerIndex: number;
+  readonly payerPlayerIndex?: number;
   readonly evaluation: HuEvaluation;
+  readonly threeMouthResolution?: ThreeMouthHuResolution;
 }
 
 export interface SinglePayerWinHandResult {
@@ -378,6 +392,7 @@ export interface SinglePayerWinHandResult {
   readonly source: 'discard' | 'rob-bu-gang';
   readonly winningTile: OrdinaryHandTile;
   readonly payerPlayerIndex: number;
+  readonly triggerPlayerIndex?: number;
   readonly winners: readonly WinHandWinner[];
 }
 
@@ -386,6 +401,7 @@ export type SelfDrawWinHandResult = {
   readonly source: 'self-draw';
   readonly winningTile: OrdinaryHandTile;
   readonly winner: WinHandWinner;
+  readonly payerPlayerIndex?: number;
 } & (
   | {
       readonly drawSource: Exclude<SelfDrawSource, 'flower-replacement'>;
@@ -438,6 +454,22 @@ export interface ActiveGangPackageState {
 
 export type GangPackageState = { readonly status: 'none' } | ActiveGangPackageState;
 
+export type ThreeMouthPlayerState =
+  | {
+      readonly status: 'tracking';
+      readonly mouthCount: 0 | 1 | 2;
+      readonly lockedPayerPlayerIndex: number | null;
+    }
+  | { readonly status: 'active'; readonly payerPlayerIndex: number }
+  | { readonly status: 'invalid' };
+
+export type ThreeMouthState = readonly [
+  ThreeMouthPlayerState,
+  ThreeMouthPlayerState,
+  ThreeMouthPlayerState,
+  ThreeMouthPlayerState,
+];
+
 export interface DiHuDecisionAvailability {
   readonly playerIndex: number;
   readonly decisions: readonly ['declare', 'pass'];
@@ -459,6 +491,7 @@ export interface GameState {
   handProgressFacts: HandProgressFacts;
   specialDiscardTracking: SpecialDiscardTrackingState;
   gangPackage: GangPackageState;
+  threeMouthState: ThreeMouthState;
   diHuDeclarations?: DiHuDeclarationState;
   selfDrawProvenance?: SelfDrawProvenance;
   result?: HandResult;

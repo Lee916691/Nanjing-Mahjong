@@ -30,6 +30,8 @@ export type {
   FlowerKongScoringContext,
   HuEvaluationContext,
   HuScoringContext,
+  ThreeMouthForcedHuContext,
+  ThreeMouthForcedHuResolution,
   MingGangScoringContext,
   ReactionAvailabilityContext,
   SpecialDiscardScoringContext,

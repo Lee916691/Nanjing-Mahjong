@@ -29,6 +29,9 @@ export type {
   HandProgressFacts,
   ActiveGangPackageState,
   GangPackageState,
+  ThreeMouthPlayerState,
+  ThreeMouthState,
+  ThreeMouthHuResolution,
   HandResult,
   DrawHandResult,
   WinHandResult,
@@ -110,6 +113,8 @@ export type {
   FlowerKongScoringContext,
   HuEvaluationContext,
   HuScoringContext,
+  ThreeMouthForcedHuContext,
+  ThreeMouthForcedHuResolution,
   MingGangScoringContext,
   ReactionAvailabilityContext,
   SpecialDiscardScoringContext,
@@ -176,6 +181,8 @@ export type {
   HuTriplet,
   SevenPairsHuStructure,
   StandardHuStructure,
+  ThreeMouthForcedHuStructure,
+  ThreeMouthSpecialHuTrigger,
 } from './hu';
 
 export {

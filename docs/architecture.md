@@ -318,3 +318,33 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - 成功创建承包胡结果和事件时，Reducer 原子增加一次 `packageSettlementCount`；`selfDrawCount` 继续独立增加一次，只有杠开增加 `gangKaiCount`。多个 continuation 事实仍由既有 Match 决策函数统一作一次庄家推进决定，不按事实或 transfer 条数重复推进。
 - `hu-resolved` 保存重定向后的完整 transfer 快照后，Reducer 立即结束手牌并把 active package 清为 none。Match settlement 完全不读取 package，只校验并消费快照；点炮和抢补杠不适用该重定向。下一手统一重置 package、package settlement 与其他局内事实。
 - 非 Hu 实时收入仍走 T1 边界且不增加 `packageSettlementCount`。三嘴、三清、全球及其他包子仍未实现。
+
+## 18. 三嘴状态与正式动作推进边界
+
+- `GameState.threeMouthState` 为四名玩家分别保存一项独立状态，不把责任关系合并为全局图。状态只有 `tracking | active | invalid` 三种：`tracking` 仅保存 `mouthCount`（0、1、2）和可空的唯一 `lockedPayerPlayerIndex`；`active` 仅保存唯一 `payerPlayerIndex`；`invalid` 不保存原因。状态不记录每嘴贡献历史、Meld 副本、金额、转账或触发时间。
+- Reducer 在权威入口使用局部 unknown-safe validator，精确验证四项 tuple、variant 字段、玩家索引和责任人不等于受益者。损坏状态使相关 availability 返回空，并使会读取或推进三嘴的 action 原引用 no-op，避免部分移牌、建 Meld、创建事件、计分或消耗牌墙。
+- Peng 只在弃牌响应窗口正式解析并创建 Meld 后推进一嘴；提交 response、等待其他响应、被 Hu 优先级压制、陈旧响应或重复解析均不推进。直接 MingGang 同样只在 Meld、实时事件、尾补和既有 gang package 能原子成立后推进。
+- 外部 Peng / MingGang 第一次出现时锁定真实弃牌者为唯一 payer；后续同源外部嘴继续计数，异源外部嘴使该玩家本手永久 `invalid`。`invalid` 不会被后续外部嘴或暗杠恢复。
+- AnGang 只在四张实体、付款拓扑、Meld、实时事件和牌尾补牌均可原子成立后推进。已有外部 payer 时暗杠保留该 payer；尚无 payer 的前两次纯暗杠保持匿名 tracking，第三次纯暗杠仍正常成立但把三嘴资格永久置为 `invalid`。
+- 达到第三嘴时状态转为 `active`，不再保存 `mouthCount = 3`。`active` 可以与同一次第三嘴 MingGang 建立的 `gangPackage` 同时存在，两者互不覆盖；既有 MingGang 实时付款和 gang package 生命周期保持不变。
+- BuGang 不新增嘴：声明、全 Pass 后正式升级、被抢和陈旧 finalize 都不推进或恢复三嘴状态。FlowerKong 在初始发牌、初始补花和运行期补花中均不推进三嘴状态。
+- T1 在 `active` 后从弃牌响应 availability 移除 Peng / MingGang，并在提交和解析边界再次拒绝伪造；AnGang availability 返回空且声明原引用 no-op。BuGang 与 FlowerKong 仍按原规则执行并保持 active payer 不变。
+- 三嘴特殊胡替代 action 与 availability 留到 Phase 14D-T2；T1 不允许第四次 Peng、MingGang 或 AnGang，也不声称完整三嘴胡牌闭环已经完成。
+- `active` 本身不创建三嘴付款、不增加 `packageSettlementCount`、不触发不过庄，也不改变庄家推进。三嘴付款、自然胡边界、Multi-Hu / Di Hu、与其他承包的最终优先级结算均不在 T1 实现。
+- Match 层不读取 `threeMouthState`，RuleSet 也不接收或读取完整三嘴状态；Reducer 在正式动作提交边界负责状态验证、availability 过滤和纯不可变转移。下一手通过新的 `GameState` 将四名玩家全部重置为 tracking 0 / null。
+- 三嘴状态属于服务端权威裁判状态；面向客户端的安全视图及隐藏字段策略延期到 server 阶段实现。
+
+## 19. 三嘴特殊胡与强制结算边界
+
+- Phase 14D-T2 保留 T1 的 `tracking | active | invalid` 状态机。`active` 后的第四次 Peng / 直接 MingGang 机会不再建立 Meld，而是在同一个弃牌响应窗口中只暴露既有 `hu`；新取得的第四张同牌形成暗杠候选时不再暴露 AnGang，而由既有 `DECLARE_SELF_DRAW_HU` 处理。没有新增客户端 Action。
+- 弃牌特殊候选绑定真实 `DiscardReactionWindow`、`lastDiscard` 和弃牌记录；自摸特殊候选绑定当前 `SelfDrawProvenance.tileId`，并要求移除该实体前恰有另外三张同牌实体。旧四张组合不会在后续无关 provenance 下重复触发，新 provenance 真正完成另一组四张时可以产生新候选。
+- 弃牌特殊 Hu 的 Pass 复用普通响应 Pass，并写入既有 `passHu`；该玩家不能在同一窗口改为 Peng / MingGang，其他玩家响应继续。特殊自摸通过合法 `DISCARD_TILE` 放弃，清除当前 provenance，但不写 `passHu`，也不新增长期 self-draw-pass 状态。
+- `HuStructure` 增加显式 `three-mouth-forced` 变体，使特殊终局无需伪造普通四面子一将、七对或龙七对结构。事件与结果仍保存真实物理 `source` 和 winning tile；每名特殊赢家另存 `ThreeMouthHuResolution`，分别记录 trigger source、真实 `triggerPlayerIndex`、`self-draw` 结算拓扑、强制基础牌型和三嘴 payer。弃牌 trigger 是真实弃牌者，自摸 trigger 是赢家本人，不伪造 `SelfDrawProvenance`。
+- `RuleSet.getThreeMouthForcedHuResolution` 只接收赢家、payer、真实触发、winning tile、最小手牌 / Meld / 花牌、地胡及真实自摸来源等只读上下文，不读取 `GameState`。RuleSet 负责强制对对胡或全球独钓、实际可叠加牌型、单份金额及三条付款快照；Reducer 不写死金额。
+- 锁定 payer 本人弃出第四次 Peng / MingGang 机会，或 active 玩家新摸形成暗杠候选时，强制全球独钓且不叠加对对胡；第三家弃牌时强制对对胡。地胡、花开和杠开只在真实声明或 provenance 满足时叠加，弃牌特殊 Hu 不凭空产生花开 / 杠开。
+- 每次三嘴强制终局保留三条相同金额、相同 payer、相同 receiver 的独立 transfer，不聚合。顶层结果、对应 `hu-resolved`、`ThreeMouthHuResolution` 与三条 transfer 的 payer 必须同为锁定责任人；第三方弃牌者只作为 trigger，不支付三嘴胡牌分。Reducer 与 Match 快照边界都验证条数、索引、付款方向、金额一致性、trigger/source 关系、禁止自付及禁止 extra 字段；任一失败使整个 Hu action 或 settlement 事务失败。
+- 三嘴责任高于当前 `gangPackage`：特殊赢家的三条最终 Hu transfer 全部使用 three-mouth payer，既有实时杠分不撤销，结果快照后 gang package 按既有终局策略清为 none。按 V1.0.8 的同一责任人锁定规则，真实可达的三嘴与杠后承包共享同一外部责任人；不同 payer 组合只作为损坏快照/优先级防御边界，不冒充真实动作链。
+- 特殊弃牌 Hu 与其他玩家普通 Hu 可进入既有 Multi-Hu resolver；赢家顺序保持 responder 顺序，每名赢家独立生成 evaluation、metadata、payer 和 transfer，三嘴责任不扩散到普通赢家。共享结果在混合责任时保存每赢家 payer；Match 仍只校验并消费冻结事件快照，不读取 `threeMouthState` 或重新选择 payer。普通胡旧结果无需每赢家 payer，保持兼容。自然对对胡三嘴结算及完整承包优先级矩阵仍留待 T3。
+- 成功特殊终局原子写入 `HandResult`、一个对应赢家的 `hu-resolved` event，并将 `packageSettlementCount` 与 `selfDrawCount` 各增加一次；只有真实 Gang Kai 增加 `gangKaiCount`。不存在的新 Peng / MingGang / AnGang、实时杠分、尾补或 wall 消耗均不记录。
+- Match 不读取 `threeMouthState`，也不重算三嘴牌型或金额；它只验证并消费事件 transfer 快照。`completeCurrentHand` 继续通过 `packageSettlementCount` 统一实现不过庄，第16局多个 continuation 事实仍只形成一次决定；`prepareNextHand` 通过新 `GameState` 重置三嘴、gang package 和局内 facts。
+- server 安全视图、自然对对胡三嘴结算、Rob-BuGang 三嘴、三清、全球承包状态和完整 Multi-Hu 承包优先级仍未实现。

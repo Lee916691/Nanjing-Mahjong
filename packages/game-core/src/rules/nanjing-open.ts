@@ -2,6 +2,8 @@ import type { ReactionResponseType } from '../actions';
 import {
   evaluateHuStructure,
   getWinningTileFaces,
+  isValidMeld,
+  isValidOrdinaryHandTile,
   isValidOrdinaryTileFace,
   ordinaryTileFace,
   ordinaryTileFaceKey,
@@ -10,6 +12,10 @@ import type { HuStructure } from '../hu';
 import {
   NUMBER_TILE_RANKS,
   NUMBER_TILE_SUITS,
+  FOUR_COPY_FLOWER_KINDS,
+  FOUR_COPY_INDEXES,
+  PLANT_FLOWER_KINDS,
+  SEASON_FLOWER_KINDS,
   WIND_TILE_KINDS,
   isSameOrdinaryTileFace,
 } from '../state';
@@ -25,6 +31,8 @@ import type {
   ReactionAvailabilityContext,
   RuleSet,
   SpecialDiscardScoringContext,
+  ThreeMouthForcedHuContext,
+  ThreeMouthForcedHuResolution,
 } from './RuleSet';
 
 const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
@@ -92,6 +100,7 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
       },
     ];
   },
+  getThreeMouthForcedHuResolution: getThreeMouthForcedHuResolution,
   getFlowerKongScoreTransfers: ({ playerIndex, playerCount }) =>
     otherPlayers(playerIndex, playerCount).map((payerPlayerIndex) => ({
       fromPlayerIndex: payerPlayerIndex,
@@ -99,6 +108,230 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
       amount: 20,
     })),
 };
+
+function getThreeMouthForcedHuResolution(
+  context: ThreeMouthForcedHuContext,
+): ThreeMouthForcedHuResolution | null {
+  if (!isValidThreeMouthForcedHuContext(context)) return null;
+  const allTiles = [
+    ...context.concealedTiles,
+    context.winningTile,
+    ...context.melds.flatMap((meld) => meld.tiles),
+  ];
+  const numberSuits = new Set(
+    allTiles.filter((tile) => tile.category === 'number').map((tile) => tile.suit),
+  );
+  const hasWinds = allTiles.some((tile) => tile.category === 'wind');
+  const patterns: HuPattern[] = [];
+  if (context.melds.every((meld) => meld.type !== 'peng')) patterns.push('men-qing');
+  patterns.push(context.forcedBasePattern);
+  if (numberSuits.size === 1 && hasWinds) patterns.push('mixed-one-suit');
+  if (numberSuits.size === 1 && !hasWinds) patterns.push('pure-one-suit');
+  if (context.flowers.length === 0) patterns.push('no-flower');
+  if (isApplicableThreeMouthDiHu(context)) patterns.push('di-hu');
+  if (context.source === 'self-draw') {
+    if (
+      context.drawSource === 'ming-gang-tail' ||
+      context.drawSource === 'an-gang-tail' ||
+      context.drawSource === 'bu-gang-tail' ||
+      (context.drawSource === 'flower-replacement' && context.formedFlowerKongDuringReplacement)
+    ) {
+      patterns.push('gang-kai');
+    } else if (context.drawSource === 'flower-replacement') {
+      patterns.push('hua-kai');
+    }
+  }
+  const evaluation: HuEvaluation = {
+    structure: { type: 'three-mouth-forced', trigger: context.trigger },
+    patterns,
+    hardFlowerCount: context.flowers.length,
+    softFlowerCount: forcedSoftFlowerCount(context, patterns, numberSuits.size),
+  };
+  const unmultiplied =
+    10 +
+    patterns.reduce((total, pattern) => total + PATTERN_POINTS[pattern], 0) +
+    (evaluation.hardFlowerCount + evaluation.softFlowerCount) * 2;
+  const threeMouthResolution = {
+    triggerSource: context.trigger,
+    triggerPlayerIndex:
+      context.source === 'discard' ? context.discarderPlayerIndex : context.winnerPlayerIndex,
+    settlementMode: 'self-draw' as const,
+    forcedBasePattern: context.forcedBasePattern,
+    payerPlayerIndex: context.payerPlayerIndex,
+  };
+  return {
+    evaluation,
+    transfers: Array.from({ length: context.playerCount - 1 }, () => ({
+      fromPlayerIndex: context.payerPlayerIndex,
+      toPlayerIndex: context.winnerPlayerIndex,
+      amount: unmultiplied * 2,
+    })),
+    threeMouthResolution,
+  };
+}
+
+function isValidThreeMouthForcedHuContext(value: unknown): value is ThreeMouthForcedHuContext {
+  if (
+    !isRecord(value) ||
+    value.playerCount !== 4 ||
+    !isPlayerIndex(value.winnerPlayerIndex) ||
+    !isPlayerIndex(value.payerPlayerIndex) ||
+    value.winnerPlayerIndex === value.payerPlayerIndex ||
+    !isValidOrdinaryHandTile(value.winningTile) ||
+    !Array.isArray(value.concealedTiles) ||
+    !value.concealedTiles.every(isValidOrdinaryHandTile) ||
+    !Array.isArray(value.melds) ||
+    !value.melds.every(isValidMeld) ||
+    !Array.isArray(value.flowers) ||
+    !value.flowers.every(isValidFlowerTile) ||
+    !Array.isArray(value.allMelds) ||
+    !value.allMelds.every(isValidMeld) ||
+    (value.forcedBasePattern !== 'all-pungs' && value.forcedBasePattern !== 'global-single-wait')
+  ) {
+    return false;
+  }
+  const allowedKeys = [
+    'source',
+    'winnerPlayerIndex',
+    'payerPlayerIndex',
+    'playerCount',
+    'winningTile',
+    'concealedTiles',
+    'melds',
+    'flowers',
+    'allMelds',
+    'dealerIndex',
+    'diHuDeclaration',
+    'trigger',
+    'forcedBasePattern',
+    'discarderPlayerIndex',
+    'drawSource',
+    'formedFlowerKongDuringReplacement',
+  ];
+  if (Object.keys(value).some((key) => !allowedKeys.includes(key))) return false;
+  if (value.dealerIndex !== undefined && !isPlayerIndex(value.dealerIndex)) return false;
+  if (value.diHuDeclaration !== undefined && !isValidDiHuDeclaration(value.diHuDeclaration)) {
+    return false;
+  }
+  const ordinaryEntities = [
+    value.winningTile,
+    ...value.concealedTiles,
+    ...value.melds.flatMap((meld) => meld.tiles),
+  ] as OrdinaryHandTile[];
+  const entityIds = [
+    ...ordinaryEntities.map((tile) => tile.id),
+    ...value.flowers.map((tile) => tile.id),
+  ];
+  if (
+    new Set(entityIds).size !== entityIds.length ||
+    new Set(value.melds.map((meld) => meld.id)).size !== value.melds.length ||
+    new Set(value.allMelds.map((meld) => meld.id)).size !== value.allMelds.length
+  )
+    return false;
+  const faceCounts = new Map<string, number>();
+  for (const tile of ordinaryEntities) {
+    const key = ordinaryTileFaceKey(ordinaryTileFace(tile));
+    faceCounts.set(key, (faceCounts.get(key) ?? 0) + 1);
+  }
+  if ([...faceCounts.values()].some((count) => count > 4)) return false;
+  const winningTile = value.winningTile as OrdinaryHandTile;
+  const matchingConcealedCount = (value.concealedTiles as OrdinaryHandTile[]).filter((tile) =>
+    isSameOrdinaryTileFace(tile, winningTile),
+  ).length;
+  if (value.source === 'discard') {
+    return (
+      isPlayerIndex(value.discarderPlayerIndex) &&
+      value.discarderPlayerIndex !== value.winnerPlayerIndex &&
+      (value.forcedBasePattern === 'global-single-wait') ===
+        (value.discarderPlayerIndex === value.payerPlayerIndex) &&
+      (value.trigger === 'discard-peng-opportunity' ||
+        value.trigger === 'discard-ming-gang-opportunity') &&
+      (value.trigger === 'discard-ming-gang-opportunity'
+        ? matchingConcealedCount === 3
+        : matchingConcealedCount >= 2) &&
+      value.drawSource === undefined &&
+      value.formedFlowerKongDuringReplacement === undefined
+    );
+  }
+  if (value.source !== 'self-draw' || value.trigger !== 'self-draw-an-gang-opportunity') {
+    return false;
+  }
+  if (value.forcedBasePattern !== 'global-single-wait') return false;
+  if (matchingConcealedCount !== 3) return false;
+  return value.drawSource === 'flower-replacement'
+    ? typeof value.formedFlowerKongDuringReplacement === 'boolean'
+    : value.drawSource === 'wall-head' ||
+        value.drawSource === 'ming-gang-tail' ||
+        value.drawSource === 'an-gang-tail' ||
+        value.drawSource === 'bu-gang-tail';
+}
+
+function isValidFlowerTile(value: unknown): boolean {
+  if (!isRecord(value) || value.category !== 'flower') return false;
+  if (value.flowerGroup === 'four-copy') {
+    return (
+      hasOnlyKeys(value, ['category', 'id', 'flowerGroup', 'flower', 'copy']) &&
+      FOUR_COPY_FLOWER_KINDS.some((flower) => flower === value.flower) &&
+      FOUR_COPY_INDEXES.some((copy) => copy === value.copy) &&
+      value.id === `flower-${String(value.flower)}-${String(value.copy)}`
+    );
+  }
+  if (value.flowerGroup === 'plant') {
+    return (
+      hasOnlyKeys(value, ['category', 'id', 'flowerGroup', 'flower', 'copy']) &&
+      PLANT_FLOWER_KINDS.some((flower) => flower === value.flower) &&
+      value.copy === 1 &&
+      value.id === `flower-${String(value.flower)}-1`
+    );
+  }
+  return (
+    value.flowerGroup === 'season' &&
+    hasOnlyKeys(value, ['category', 'id', 'flowerGroup', 'flower', 'copy']) &&
+    SEASON_FLOWER_KINDS.some((flower) => flower === value.flower) &&
+    value.copy === 1 &&
+    value.id === `season-${String(value.flower)}-1`
+  );
+}
+
+function isApplicableThreeMouthDiHu(context: ThreeMouthForcedHuContext): boolean {
+  const declaration = context.diHuDeclaration;
+  if (
+    !isValidDiHuDeclaration(declaration) ||
+    declaration.playerIndex !== context.winnerPlayerIndex ||
+    context.dealerIndex === context.winnerPlayerIndex ||
+    !declaration.winningTileFaces.some((face) =>
+      isSameOrdinaryTileFaceValue(face, ordinaryTileFace(context.winningTile)),
+    )
+  ) {
+    return false;
+  }
+  return (
+    context.source === 'discard' ||
+    context.drawSource === 'wall-head' ||
+    context.drawSource === 'ming-gang-tail' ||
+    context.drawSource === 'an-gang-tail' ||
+    context.drawSource === 'flower-replacement'
+  );
+}
+
+function forcedSoftFlowerCount(
+  context: ThreeMouthForcedHuContext,
+  patterns: readonly HuPattern[],
+  numberSuitCount: number,
+): number {
+  let count =
+    !patterns.includes('mixed-one-suit') &&
+    !patterns.includes('pure-one-suit') &&
+    numberSuitCount === 2
+      ? 1
+      : 0;
+  for (const meld of context.melds) {
+    if (meld.type === 'ming-gang' || meld.type === 'bu-gang') count += 1;
+    if (meld.type === 'an-gang') count += 2;
+    if (meld.tiles[0]?.category === 'wind') count += 1;
+  }
+  return count;
+}
 
 function getSpecialDiscardScoreTransfers(context: unknown) {
   if (!isValidSpecialDiscardScoringContext(context)) return [];

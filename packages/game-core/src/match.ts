@@ -275,8 +275,28 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
     if (!Array.isArray(candidate.transfers) || candidate.transfers.length === 0) {
       throw settlementError(`event ${eventIndex} transfers must be a non-empty array`);
     }
+    if (candidate.type === 'hu-resolved' && candidate.threeMouthResolution !== undefined) {
+      const metadata = candidate.threeMouthResolution;
+      const transfers = candidate.transfers as unknown[];
+      if (
+        !isRecord(metadata) ||
+        transfers.length !== players.length - 1 ||
+        !transfers.every(
+          (transfer) =>
+            isRecord(transfer) &&
+            transfer.fromPlayerIndex === metadata.payerPlayerIndex &&
+            transfer.toPlayerIndex === candidate.winnerPlayerIndex &&
+            transfer.amount === (transfers[0] as Record<string, unknown> | undefined)?.amount,
+        )
+      ) {
+        throw settlementError(`event ${eventIndex} three-mouth transfer topology is invalid`);
+      }
+    }
     candidate.transfers.forEach((transfer: unknown, transferIndex) => {
-      if (!isRecord(transfer)) {
+      if (
+        !isRecord(transfer) ||
+        !hasExactKeys(transfer, ['fromPlayerIndex', 'toPlayerIndex', 'amount'])
+      ) {
         throw settlementError(`event ${eventIndex} transfer ${transferIndex} must be an object`);
       }
       const from = validPlayerIndex(
