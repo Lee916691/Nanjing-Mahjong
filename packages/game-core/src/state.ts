@@ -428,6 +428,16 @@ export type DiHuDeclarationState =
       readonly declarations: readonly DiHuDeclaration[];
     };
 
+export interface ActiveGangPackageState {
+  readonly status: 'active';
+  readonly payerPlayerIndex: number;
+  readonly beneficiaryPlayerIndex: number;
+  readonly source: 'ming-gang' | 'bu-gang';
+  readonly establishedByMeldId: string;
+}
+
+export type GangPackageState = { readonly status: 'none' } | ActiveGangPackageState;
+
 export interface DiHuDecisionAvailability {
   readonly playerIndex: number;
   readonly decisions: readonly ['declare', 'pass'];
@@ -448,6 +458,7 @@ export interface GameState {
   pendingScoringEvents: readonly PendingScoringEvent[];
   handProgressFacts: HandProgressFacts;
   specialDiscardTracking: SpecialDiscardTrackingState;
+  gangPackage: GangPackageState;
   diHuDeclarations?: DiHuDeclarationState;
   selfDrawProvenance?: SelfDrawProvenance;
   result?: HandResult;

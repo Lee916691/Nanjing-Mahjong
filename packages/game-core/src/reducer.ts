@@ -38,6 +38,7 @@ import type {
   FlowerKongKind,
   FlowerReplacementResult,
   FlowerTile,
+  GangPackageState,
   GameState,
   HandProgressFacts,
   HandResult,
@@ -80,6 +81,7 @@ export type {
 } from './actions';
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
+  if (action.type !== 'START_GAME' && validGangPackageState(state) === null) return state;
   switch (action.type) {
     case 'START_GAME':
       return startGameState(state, {
@@ -203,6 +205,7 @@ export function getAvailableSelfDrawHu(
   state: GameState,
   playerIndex: number,
 ): SelfDrawHuAvailability | null {
+  if (validGangPackageState(state) === null) return null;
   const candidate = validSelfDrawHuCandidate(state, playerIndex);
   if (!candidate) return null;
   return candidate.drawSource === 'flower-replacement'
@@ -227,6 +230,8 @@ export function declareSelfDrawHuReducer(
 ): GameState {
   const candidate = validSelfDrawHuCandidate(state, action.playerIndex);
   if (!candidate) return state;
+  const gangPackage = validGangPackageState(state);
+  if (!gangPackage) return state;
   const ruleSet = getRuleSet(state.ruleSetId);
   const sourceDetails =
     candidate.drawSource === 'flower-replacement'
@@ -235,15 +240,23 @@ export function declareSelfDrawHuReducer(
           formedFlowerKongDuringReplacement: candidate.formedFlowerKongDuringReplacement,
         }
       : { drawSource: candidate.drawSource };
-  const transfers = ruleSet
-    .getHuScoreTransfers({
-      source: 'self-draw',
-      winnerPlayerIndex: action.playerIndex,
-      playerCount: state.players.length,
-      evaluation: candidate.evaluation,
-      ...sourceDetails,
-    })
-    .map((transfer) => ({ ...transfer }));
+  const baseTransfers = ruleSet.getHuScoreTransfers({
+    source: 'self-draw',
+    winnerPlayerIndex: action.playerIndex,
+    playerCount: state.players.length,
+    evaluation: candidate.evaluation,
+    ...sourceDetails,
+  });
+  if (!isValidBaseSelfDrawTransfers(baseTransfers, action.playerIndex, state.players.length)) {
+    return state;
+  }
+  const transfers = redirectTransfersForGangPackage(
+    baseTransfers,
+    gangPackage,
+    state.players.length,
+  );
+  if (!transfers) return state;
+  const isPackageSettlement = gangPackage.status === 'active';
   const winner = { playerIndex: action.playerIndex, evaluation: candidate.evaluation };
   const nextState: GameState = {
     ...copyGameState(state),
@@ -251,6 +264,7 @@ export function declareSelfDrawHuReducer(
     turnStage: 'hand-ended',
     pendingAction: createNoPendingAction(),
     selfDrawProvenance: undefined,
+    gangPackage: { status: 'none' },
     pendingScoringEvents: [
       ...state.pendingScoringEvents,
       {
@@ -270,6 +284,8 @@ export function declareSelfDrawHuReducer(
       gangKaiCount:
         state.handProgressFacts.gangKaiCount +
         (candidate.evaluation.patterns.includes('gang-kai') ? 1 : 0),
+      packageSettlementCount:
+        state.handProgressFacts.packageSettlementCount + (isPackageSettlement ? 1 : 0),
     },
     specialDiscardTracking: {
       ...state.specialDiscardTracking,
@@ -287,6 +303,7 @@ export function declareSelfDrawHuReducer(
 }
 
 export function getAvailableBuGangs(state: GameState, playerIndex: number): AvailableBuGang[] {
+  if (validGangPackageState(state) === null) return [];
   if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return [];
   if (diHuDeclarationFor(state, playerIndex)) return [];
   return findBuGangCandidates(state, playerIndex).map((candidate) => ({
@@ -296,6 +313,7 @@ export function getAvailableBuGangs(state: GameState, playerIndex: number): Avai
 }
 
 export function getAvailableAnGangs(state: GameState, playerIndex: number): OrdinaryTileFace[] {
+  if (validGangPackageState(state) === null) return [];
   if (state.diHuDeclarations !== undefined && !validDiHuDeclarationState(state)) return [];
   if (!isAnGangTurn(state, playerIndex)) return [];
   const player = state.players[playerIndex];
@@ -348,13 +366,22 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
     tailDraw.wall,
   );
   const meldId = `meld-${state.nextMeldSequence}`;
-  const transfers = getRuleSet(state.ruleSetId)
-    .getAnGangScoreTransfers({
-      playerIndex: action.playerIndex,
-      playerCount: state.players.length,
-      meldId,
-    })
-    .map((transfer) => ({ ...transfer }));
+  const baseTransfers = getRuleSet(state.ruleSetId).getAnGangScoreTransfers({
+    playerIndex: action.playerIndex,
+    playerCount: state.players.length,
+    meldId,
+  });
+  if (
+    !isValidOtherPlayersTransferTopology(baseTransfers, action.playerIndex, state.players.length)
+  ) {
+    return state;
+  }
+  const transfers = redirectTransfersForGangPackage(
+    baseTransfers,
+    state.gangPackage,
+    state.players.length,
+  );
+  if (!transfers) return state;
   const scoringEvents: PendingScoringEvent[] = [
     ...state.pendingScoringEvents,
     {
@@ -386,6 +413,7 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
   );
   const pendingScoringEvents = appendRuntimeFlowerKongEvents(
     state.ruleSetId,
+    state.gangPackage,
     scoringEvents,
     player,
     action.playerIndex,
@@ -393,6 +421,7 @@ export function declareAnGangReducer(state: GameState, action: DeclareAnGangActi
     drawResolution.newlyRevealedFlowers,
     drawResolution.status === 'wall-exhausted',
   );
+  if (!pendingScoringEvents) return state;
   const nextState: GameState = {
     ...state,
     nextMeldSequence: state.nextMeldSequence + 1,
@@ -540,6 +569,7 @@ export function drawReducer(state: GameState): GameState {
 
   const pendingScoringEvents = appendRuntimeFlowerKongEvents(
     state.ruleSetId,
+    state.gangPackage,
     state.pendingScoringEvents ?? [],
     currentPlayer,
     state.currentPlayerIndex,
@@ -547,6 +577,7 @@ export function drawReducer(state: GameState): GameState {
     drawResolution.newlyRevealedFlowers,
     drawResolution.status === 'wall-exhausted',
   );
+  if (!pendingScoringEvents) return state;
 
   const nextState: GameState = {
     nextMeldSequence: state.nextMeldSequence,
@@ -573,6 +604,7 @@ export function drawReducer(state: GameState): GameState {
       pendingScoringEvents,
     ),
     specialDiscardTracking: state.specialDiscardTracking,
+    gangPackage: state.gangPackage,
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -709,6 +741,11 @@ export function discardReducer(state: GameState, action: DiscardAction): GameSta
     pendingScoringEvents: [...(state.pendingScoringEvents ?? []), ...specialDiscardUpdate.events],
     handProgressFacts: specialDiscardUpdate.handProgressFacts,
     specialDiscardTracking: specialDiscardUpdate.tracking,
+    gangPackage:
+      state.gangPackage.status === 'active' &&
+      state.gangPackage.beneficiaryPlayerIndex === state.currentPlayerIndex
+        ? { status: 'none' }
+        : state.gangPackage,
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -850,6 +887,11 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
   const huResponses = nonPassResponses.filter((response) => response.type === 'hu');
 
   if (huResponses.length > 0) {
+    if (state.gangPackage.status === 'active') {
+      return window.source === 'bu-gang'
+        ? cancelStaleBuGangIntent(state, window)
+        : closeDiscardReactionWithoutClaim(state, window);
+    }
     return resolveHu(state, window, huResponses);
   }
 
@@ -869,17 +911,7 @@ export function resolveReactionWindowReducer(state: GameState): GameState {
     return state;
   }
 
-  const nextDrawPlayerIndex = nextPlayerIndex(window.fromPlayerIndex);
-
-  const nextState: GameState = {
-    ...copyGameState(state),
-    currentPlayerIndex: nextDrawPlayerIndex,
-    turnStage: 'waiting-for-draw',
-    pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
-    reactionWindow: { ...window, status: 'closed' },
-    selfDrawProvenance: undefined,
-  };
-  return state.wall.length === 0 ? markHandEnded(nextState) : nextState;
+  return closeDiscardReactionWithoutClaim(state, window);
 }
 
 function resolveMingGang(
@@ -1009,6 +1041,38 @@ function resolveMingGang(
 
     return candidate;
   });
+  const gangPackage: GangPackageState =
+    state.gangPackage.status === 'none'
+      ? {
+          status: 'active',
+          payerPlayerIndex: window.fromPlayerIndex,
+          beneficiaryPlayerIndex: playerIndex,
+          source: 'ming-gang',
+          establishedByMeldId: meldId,
+        }
+      : state.gangPackage;
+  const baseTransfers = getRuleSet(state.ruleSetId).getMingGangScoreTransfers({
+    receiverPlayerIndex: playerIndex,
+    payerPlayerIndex: window.fromPlayerIndex,
+    playerCount: state.players.length,
+    meldId,
+  });
+  if (
+    !isValidSinglePayerTransferTopology(
+      baseTransfers,
+      window.fromPlayerIndex,
+      playerIndex,
+      state.players.length,
+    )
+  ) {
+    return closeDiscardReactionWithoutClaim(state, window);
+  }
+  const transfers = redirectTransfersForGangPackage(
+    baseTransfers,
+    gangPackage,
+    state.players.length,
+  );
+  if (!transfers) return closeDiscardReactionWithoutClaim(state, window);
   const scoringEvents: PendingScoringEvent[] = [
     ...state.pendingScoringEvents,
     {
@@ -1016,17 +1080,13 @@ function resolveMingGang(
       receiverPlayerIndex: playerIndex,
       payerPlayerIndex: window.fromPlayerIndex,
       meldId,
-      transfers: getRuleSet(state.ruleSetId).getMingGangScoreTransfers({
-        receiverPlayerIndex: playerIndex,
-        payerPlayerIndex: window.fromPlayerIndex,
-        playerCount: state.players.length,
-        meldId,
-      }),
+      transfers,
       status: 'pending',
     },
   ];
   const pendingScoringEvents = appendRuntimeFlowerKongEvents(
     state.ruleSetId,
+    gangPackage,
     scoringEvents,
     player,
     playerIndex,
@@ -1034,6 +1094,7 @@ function resolveMingGang(
     drawResolution.newlyRevealedFlowers,
     drawResolution.status === 'wall-exhausted',
   );
+  if (!pendingScoringEvents) return closeDiscardReactionWithoutClaim(state, window);
   const nextState: GameState = {
     nextMeldSequence: state.nextMeldSequence + 1,
     ruleSetId: state.ruleSetId,
@@ -1063,6 +1124,7 @@ function resolveMingGang(
       pendingScoringEvents,
     ),
     specialDiscardTracking: trackingAfterSeatClaim(state, playerIndex),
+    gangPackage,
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -1173,11 +1235,28 @@ function resolvePeng(
   };
 }
 
+function closeDiscardReactionWithoutClaim(
+  state: GameState,
+  window: DiscardReactionWindow,
+): GameState {
+  const nextDrawPlayerIndex = nextPlayerIndex(window.fromPlayerIndex);
+  const nextState: GameState = {
+    ...copyGameState(state),
+    currentPlayerIndex: nextDrawPlayerIndex,
+    turnStage: 'waiting-for-draw',
+    pendingAction: createPendingAction(state.players, nextDrawPlayerIndex, 'draw'),
+    reactionWindow: { ...window, status: 'closed' },
+    selfDrawProvenance: undefined,
+  };
+  return state.wall.length === 0 ? markHandEnded(nextState) : nextState;
+}
+
 function resolveHu(
   state: GameState,
   window: ReactionWindow,
   huResponses: readonly ReactionResponse[],
 ): GameState {
+  if (state.gangPackage.status === 'active') return state;
   const targetTile =
     window.source === 'discard'
       ? isOrdinaryHandTile(window.discardedTile)
@@ -1314,6 +1393,38 @@ function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameSta
         )
       : player,
   );
+  const gangPackage: GangPackageState =
+    state.gangPackage.status === 'none'
+      ? {
+          status: 'active',
+          payerPlayerIndex,
+          beneficiaryPlayerIndex: window.intent.declarerPlayerIndex,
+          source: 'bu-gang',
+          establishedByMeldId: meld.id,
+        }
+      : state.gangPackage;
+  const baseTransfers = getRuleSet(state.ruleSetId).getBuGangScoreTransfers({
+    playerIndex: window.intent.declarerPlayerIndex,
+    payerPlayerIndex,
+    playerCount: state.players.length,
+    meldId: meld.id,
+  });
+  if (
+    !isValidSinglePayerTransferTopology(
+      baseTransfers,
+      payerPlayerIndex,
+      window.intent.declarerPlayerIndex,
+      state.players.length,
+    )
+  ) {
+    return cancelStaleBuGangIntent(state, window);
+  }
+  const transfers = redirectTransfersForGangPackage(
+    baseTransfers,
+    gangPackage,
+    state.players.length,
+  );
+  if (!transfers) return cancelStaleBuGangIntent(state, window);
   const scoringEvents: PendingScoringEvent[] = [
     ...state.pendingScoringEvents,
     {
@@ -1321,19 +1432,13 @@ function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameSta
       playerIndex: window.intent.declarerPlayerIndex,
       payerPlayerIndex,
       meldId: meld.id,
-      transfers: getRuleSet(state.ruleSetId)
-        .getBuGangScoreTransfers({
-          playerIndex: window.intent.declarerPlayerIndex,
-          payerPlayerIndex,
-          playerCount: state.players.length,
-          meldId: meld.id,
-        })
-        .map((transfer) => ({ ...transfer })),
+      transfers,
       status: 'pending',
     },
   ];
   const pendingScoringEvents = appendRuntimeFlowerKongEvents(
     state.ruleSetId,
+    gangPackage,
     scoringEvents,
     declarer,
     window.intent.declarerPlayerIndex,
@@ -1341,6 +1446,7 @@ function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameSta
     drawResolution.newlyRevealedFlowers,
     drawResolution.status === 'wall-exhausted',
   );
+  if (!pendingScoringEvents) return cancelStaleBuGangIntent(state, window);
   const nextState: GameState = {
     ...state,
     players,
@@ -1349,6 +1455,7 @@ function finalizeBuGang(state: GameState, window: BuGangReactionWindow): GameSta
     turnStage: 'waiting-for-discard',
     pendingAction: createPendingAction(players, window.intent.declarerPlayerIndex, 'discard'),
     reactionWindow: { ...window, status: 'closed' },
+    gangPackage,
     pendingScoringEvents,
     selfDrawProvenance: selfDrawProvenanceFromResolution(
       window.intent.declarerPlayerIndex,
@@ -1446,6 +1553,7 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    gangPackage: { status: 'none' },
     diHuDeclarations: { status: 'closed', declarations: [] },
   };
 }
@@ -1476,6 +1584,7 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    gangPackage: { status: 'none' },
     diHuDeclarations: { status: 'closed', declarations: [] },
   });
 }
@@ -1520,7 +1629,7 @@ function dealInitialHands(state: GameState): GameState {
     }
 
     const previousEvents = pendingScoringEvents;
-    pendingScoringEvents = appendFlowerKongEvents(
+    const nextEvents = appendFlowerKongEvents(
       state.ruleSetId,
       pendingScoringEvents,
       player,
@@ -1528,6 +1637,8 @@ function dealInitialHands(state: GameState): GameState {
       rawHands[playerIndex]?.filter(isFlowerTile) ?? [],
       'initial-deal',
     );
+    if (!nextEvents) return state;
+    pendingScoringEvents = nextEvents;
     handProgressFacts = addFlowerKongFacts(handProgressFacts, previousEvents, pendingScoringEvents);
   }
 
@@ -1555,7 +1666,7 @@ function dealInitialHands(state: GameState): GameState {
     };
     wall = replacement.wall;
     const previousEvents = pendingScoringEvents;
-    pendingScoringEvents = appendFlowerKongEvents(
+    const nextEvents = appendFlowerKongEvents(
       state.ruleSetId,
       pendingScoringEvents,
       players[playerIndex],
@@ -1563,6 +1674,8 @@ function dealInitialHands(state: GameState): GameState {
       replacement.flowers,
       'initial-flower-replacement',
     );
+    if (!nextEvents) return state;
+    pendingScoringEvents = nextEvents;
     handProgressFacts = addFlowerKongFacts(handProgressFacts, previousEvents, pendingScoringEvents);
 
     if (playerIndex === state.dealerIndex && replacement.status === 'complete') {
@@ -1649,6 +1762,7 @@ function finishInitialDealFromRawHands(
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
     specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    gangPackage: { status: 'none' },
   };
 
   return phase === 'ended' ? markHandEnded(nextState) : nextState;
@@ -1665,7 +1779,7 @@ function appendFlowerKongEvents(
   playerIndex: number,
   flowers: readonly FlowerTile[],
   createdDuring: ScoringEventCreationStage,
-): PendingScoringEvent[] {
+): PendingScoringEvent[] | null {
   const nextEvents = [...events];
 
   for (const kind of findFlowerKongKinds(flowers)) {
@@ -1677,18 +1791,20 @@ function appendFlowerKongEvents(
     );
 
     if (!alreadyRecorded) {
+      const transfers = getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
+        playerIndex,
+        playerCount: SEATS.length,
+        kind,
+        createdDuring,
+      });
+      if (!isValidOtherPlayersTransferTopology(transfers, playerIndex, SEATS.length)) return null;
       nextEvents.push({
         type: 'flower-kong-created',
         playerIndex,
         seat: player.seat,
         kind,
         createdDuring,
-        transfers: getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
-          playerIndex,
-          playerCount: SEATS.length,
-          kind,
-          createdDuring,
-        }),
+        transfers: transfers.map((transfer) => ({ ...transfer })),
         status: 'pending',
       });
     }
@@ -1699,13 +1815,14 @@ function appendFlowerKongEvents(
 
 function appendRuntimeFlowerKongEvents(
   ruleSetId: GameState['ruleSetId'],
+  gangPackage: GangPackageState,
   events: readonly PendingScoringEvent[],
   player: PlayerState,
   playerIndex: number,
   previousFlowers: readonly FlowerTile[],
   newlyRevealedFlowers: readonly FlowerTile[],
   suppressFinalFlower: boolean,
-): PendingScoringEvent[] {
+): PendingScoringEvent[] | null {
   const nextEvents = [...events];
   const flowers = [...previousFlowers];
   const eventFlowerCount = newlyRevealedFlowers.length - (suppressFinalFlower ? 1 : 0);
@@ -1726,18 +1843,24 @@ function appendRuntimeFlowerKongEvents(
           )
         )
           continue;
+        const baseTransfers = getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
+          playerIndex,
+          playerCount: SEATS.length,
+          kind,
+          createdDuring: 'runtime-flower-replacement',
+        });
+        if (!isValidOtherPlayersTransferTopology(baseTransfers, playerIndex, SEATS.length)) {
+          return null;
+        }
+        const transfers = redirectTransfersForGangPackage(baseTransfers, gangPackage, SEATS.length);
+        if (!transfers) return null;
         nextEvents.push({
           type: 'flower-kong-created',
           playerIndex,
           seat: player.seat,
           kind,
           createdDuring: 'runtime-flower-replacement',
-          transfers: getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
-            playerIndex,
-            playerCount: SEATS.length,
-            kind,
-            createdDuring: 'runtime-flower-replacement',
-          }),
+          transfers,
           status: 'pending',
         });
       }
@@ -1820,14 +1943,18 @@ function updateSpecialDiscardRules(
       followerCount: 0,
     };
   } else if (follow.followerCount === 2) {
-    const transfers = getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
-      source: 'follow-discard',
-      playerCount: players.length,
-      payerPlayerIndex: follow.initiatorPlayerIndex,
-      triggeringPlayerIndex: playerIndex,
-      tileFace,
-    });
-    if (!isValidGeneratedTransfers(transfers, players.length)) return null;
+    const transfers = redirectTransfersForGangPackage(
+      getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
+        source: 'follow-discard',
+        playerCount: players.length,
+        payerPlayerIndex: follow.initiatorPlayerIndex,
+        triggeringPlayerIndex: playerIndex,
+        tileFace,
+      }),
+      state.gangPackage,
+      players.length,
+    );
+    if (!transfers || !isValidGeneratedTransfers(transfers, players.length)) return null;
     followEvent = {
       type: 'special-discard',
       source: 'follow-discard',
@@ -1857,13 +1984,17 @@ function updateSpecialDiscardRules(
     new Set(matchingDiscards.map((record) => record.tile.id)).size === 4 &&
     matchingDiscards.at(-1)?.tile.id === discardedTile.id
   ) {
-    const transfers = getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
-      source: 'four-identical-discards',
-      playerCount: players.length,
-      payerPlayerIndex: playerIndex,
-      tileFace,
-    });
-    if (!isValidGeneratedTransfers(transfers, players.length)) return null;
+    const transfers = redirectTransfersForGangPackage(
+      getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
+        source: 'four-identical-discards',
+        playerCount: players.length,
+        payerPlayerIndex: playerIndex,
+        tileFace,
+      }),
+      state.gangPackage,
+      players.length,
+    );
+    if (!transfers || !isValidGeneratedTransfers(transfers, players.length)) return null;
     identicalEvent = {
       type: 'special-discard',
       source: 'four-identical-discards',
@@ -1886,13 +2017,17 @@ function updateSpecialDiscardRules(
   if (discardedTile.category === 'wind') {
     if (!winds.includes(discardedTile.wind)) winds.push(discardedTile.wind);
     if (winds.length === WIND_TILE_KINDS.length) {
-      const transfers = getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
-        source: 'four-winds-gathered',
-        playerCount: players.length,
-        receiverPlayerIndex: playerIndex,
-        completingWind: discardedTile.wind,
-      });
-      if (!isValidGeneratedTransfers(transfers, players.length)) return null;
+      const transfers = redirectTransfersForGangPackage(
+        getRuleSet(state.ruleSetId).getSpecialDiscardScoreTransfers({
+          source: 'four-winds-gathered',
+          playerCount: players.length,
+          receiverPlayerIndex: playerIndex,
+          completingWind: discardedTile.wind,
+        }),
+        state.gangPackage,
+        players.length,
+      );
+      if (!transfers || !isValidGeneratedTransfers(transfers, players.length)) return null;
       windEvent = {
         type: 'special-discard',
         source: 'four-winds-gathered',
@@ -1948,6 +2083,128 @@ function isValidGeneratedTransfers(
         Number.isInteger(transfer.amount) &&
         transfer.amount > 0,
     )
+  );
+}
+
+function validGangPackageState(state: unknown): GangPackageState | null {
+  if (!isRecord(state) || !Array.isArray(state.players) || state.players.length !== SEATS.length)
+    return null;
+  const value = state.gangPackage;
+  if (!isRecord(value)) return null;
+  if (value.status === 'none') {
+    return hasOnlyKeys(value, ['status']) ? { status: 'none' } : null;
+  }
+  if (
+    value.status !== 'active' ||
+    !hasOnlyKeys(value, [
+      'status',
+      'payerPlayerIndex',
+      'beneficiaryPlayerIndex',
+      'source',
+      'establishedByMeldId',
+    ]) ||
+    !isPlayerIndexValue(value.payerPlayerIndex, state.players.length) ||
+    !isPlayerIndexValue(value.beneficiaryPlayerIndex, state.players.length) ||
+    value.payerPlayerIndex === value.beneficiaryPlayerIndex ||
+    (value.source !== 'ming-gang' && value.source !== 'bu-gang') ||
+    typeof value.establishedByMeldId !== 'string' ||
+    value.establishedByMeldId.trim().length === 0
+  ) {
+    return null;
+  }
+  const beneficiary = state.players[value.beneficiaryPlayerIndex];
+  if (!isRecord(beneficiary) || !Array.isArray(beneficiary.melds)) return null;
+  const matching = beneficiary.melds.filter(
+    (candidate) => isRecord(candidate) && candidate.id === value.establishedByMeldId,
+  );
+  if (matching.length !== 1) return null;
+  const meld = matching[0];
+  if (
+    !meld ||
+    !isValidMeld(meld) ||
+    meld.type !== value.source ||
+    meld.fromPlayerIndex !== value.payerPlayerIndex
+  ) {
+    return null;
+  }
+  return {
+    status: 'active',
+    payerPlayerIndex: value.payerPlayerIndex,
+    beneficiaryPlayerIndex: value.beneficiaryPlayerIndex,
+    source: value.source,
+    establishedByMeldId: value.establishedByMeldId,
+  };
+}
+
+function redirectTransfersForGangPackage(
+  transfers: unknown,
+  gangPackage: GangPackageState,
+  playerCount: number,
+): readonly ScoreTransfer[] | null {
+  if (
+    !Array.isArray(transfers) ||
+    transfers.length === 0 ||
+    !transfers.every((transfer) => isValidScoreTransfer(transfer, playerCount))
+  )
+    return null;
+  return transfers.map((transfer) => ({
+    fromPlayerIndex:
+      gangPackage.status === 'active' &&
+      transfer.toPlayerIndex === gangPackage.beneficiaryPlayerIndex
+        ? gangPackage.payerPlayerIndex
+        : transfer.fromPlayerIndex,
+    toPlayerIndex: transfer.toPlayerIndex,
+    amount: transfer.amount,
+  }));
+}
+
+function isValidSinglePayerTransferTopology(
+  transfers: unknown,
+  payerPlayerIndex: number,
+  receiverPlayerIndex: number,
+  playerCount: number,
+): transfers is readonly ScoreTransfer[] {
+  return (
+    Array.isArray(transfers) &&
+    transfers.length === 1 &&
+    isValidScoreTransfer(transfers[0], playerCount) &&
+    transfers[0].fromPlayerIndex === payerPlayerIndex &&
+    transfers[0].toPlayerIndex === receiverPlayerIndex
+  );
+}
+
+function isValidOtherPlayersTransferTopology(
+  transfers: unknown,
+  receiverPlayerIndex: number,
+  playerCount: number,
+): transfers is readonly ScoreTransfer[] {
+  if (!Array.isArray(transfers) || transfers.length !== playerCount - 1) return false;
+  const payers = new Set<number>();
+  for (const transfer of transfers) {
+    if (
+      !isValidScoreTransfer(transfer, playerCount) ||
+      transfer.toPlayerIndex !== receiverPlayerIndex ||
+      transfer.fromPlayerIndex === receiverPlayerIndex ||
+      payers.has(transfer.fromPlayerIndex)
+    ) {
+      return false;
+    }
+    payers.add(transfer.fromPlayerIndex);
+  }
+  return payers.size === playerCount - 1;
+}
+
+function isValidScoreTransfer(value: unknown, playerCount: number): value is ScoreTransfer {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['fromPlayerIndex', 'toPlayerIndex', 'amount']) &&
+    isPlayerIndexValue(value.fromPlayerIndex, playerCount) &&
+    isPlayerIndexValue(value.toPlayerIndex, playerCount) &&
+    value.fromPlayerIndex !== value.toPlayerIndex &&
+    typeof value.amount === 'number' &&
+    Number.isFinite(value.amount) &&
+    Number.isInteger(value.amount) &&
+    value.amount > 0
   );
 }
 
@@ -2210,6 +2467,7 @@ function copyGameState(state: GameState): GameState {
         winds: [...sequence.winds],
       })),
     },
+    gangPackage: { ...state.gangPackage },
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -2548,9 +2806,65 @@ function validSelfDrawHuCandidate(
     diHuDeclaration: diHuDeclarationFor(state, playerIndex) ?? undefined,
     ...sourceDetails,
   });
-  return evaluation
-    ? { playerIndex, winningTile, concealedTiles, evaluation, ...sourceDetails }
-    : null;
+  if (!evaluation) return null;
+  const candidate = { playerIndex, winningTile, concealedTiles, evaluation, ...sourceDetails };
+  return isApplicableGangPackageSelfDraw(state, candidate) ? candidate : null;
+}
+
+function isApplicableGangPackageSelfDraw(
+  state: GameState,
+  candidate: ValidSelfDrawHuCandidate,
+): boolean {
+  const gangPackage = validGangPackageState(state);
+  if (!gangPackage) return false;
+  if (gangPackage.status === 'none') return true;
+  if (
+    candidate.playerIndex !== gangPackage.beneficiaryPlayerIndex ||
+    candidate.playerIndex === gangPackage.payerPlayerIndex
+  ) {
+    return false;
+  }
+  const huaKai = candidate.evaluation.patterns.includes('hua-kai');
+  const gangKai = candidate.evaluation.patterns.includes('gang-kai');
+  if (huaKai === gangKai) return false;
+  if (candidate.drawSource === 'flower-replacement') {
+    return candidate.formedFlowerKongDuringReplacement ? gangKai : huaKai;
+  }
+  return (
+    gangKai &&
+    (candidate.drawSource === 'ming-gang-tail' ||
+      candidate.drawSource === 'an-gang-tail' ||
+      candidate.drawSource === 'bu-gang-tail')
+  );
+}
+
+function isValidBaseSelfDrawTransfers(
+  transfers: unknown,
+  winnerPlayerIndex: number,
+  playerCount: number,
+): transfers is readonly ScoreTransfer[] {
+  if (!Array.isArray(transfers) || transfers.length !== playerCount - 1) return false;
+  const amounts = new Set<number>();
+  const payers = new Set<number>();
+  for (const transfer of transfers) {
+    if (
+      !isRecord(transfer) ||
+      !hasOnlyKeys(transfer, ['fromPlayerIndex', 'toPlayerIndex', 'amount']) ||
+      !isPlayerIndexValue(transfer.fromPlayerIndex, playerCount) ||
+      transfer.fromPlayerIndex === winnerPlayerIndex ||
+      payers.has(transfer.fromPlayerIndex) ||
+      transfer.toPlayerIndex !== winnerPlayerIndex ||
+      typeof transfer.amount !== 'number' ||
+      !Number.isFinite(transfer.amount) ||
+      !Number.isInteger(transfer.amount) ||
+      transfer.amount <= 0
+    ) {
+      return false;
+    }
+    payers.add(transfer.fromPlayerIndex);
+    amounts.add(transfer.amount);
+  }
+  return payers.size === playerCount - 1 && amounts.size === 1;
 }
 
 function isSafeSelfDrawCandidateState(value: unknown, playerIndex: number): value is GameState {
@@ -2579,7 +2893,8 @@ function isSafeSelfDrawCandidateState(value: unknown, playerIndex: number): valu
     !Array.isArray(value.pendingScoringEvents) ||
     !isRecord(value.handProgressFacts) ||
     !isNonNegativeInteger(value.handProgressFacts.selfDrawCount) ||
-    !isNonNegativeInteger(value.handProgressFacts.gangKaiCount)
+    !isNonNegativeInteger(value.handProgressFacts.gangKaiCount) ||
+    !isNonNegativeInteger(value.handProgressFacts.packageSettlementCount)
   ) {
     return false;
   }

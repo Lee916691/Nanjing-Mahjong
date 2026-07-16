@@ -271,7 +271,7 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 
 ## 13. 当前可达状态下的自摸闭环
 
-- Phase 13A 建立的自摸闭环已由 Phase 14A 扩展到地胡；杠后承包和其他包子付款重定向仍留待后续阶段，当前也不实现 UI、server 或 timer。
+- Phase 13A 建立的自摸闭环已由 Phase 14A 扩展到地胡；Phase 14C-T1 实现杠后承包的非胡实时收入付款重定向，Phase 14C-T2 实现合法花开/杠开承包胡闭环；其他包子仍留待后续阶段，当前也不实现 UI、server 或 timer。
 - `GameState` 同一时间最多保存一份 `SelfDrawProvenance`。它绑定当前候选玩家、具体普通牌实体 ID 和 `initial-dealer`、`wall-head`、`flower-replacement`、`ming-gang-tail`、`an-gang-tail`、`bu-gang-tail` 之一，不保存摸牌历史，也不复用补杠来源证明。
 - 初始庄家来源在完整发牌与初始补花结束后建立。无初始补花时绑定庄家发牌过程中最后取得的普通牌；有初始补花时绑定庄家补花流程最终补入的普通牌。该来源只用于首次弃牌前的天胡候选。
 - 普通墙头或杠尾直接取得普通牌时记录直接来源。只要先取得花牌，最终普通牌就记录为 `flower-replacement`；该 variant 同时记录本次真实补花链是否新创建了未去重、未被终局抑制的 flower-kong event。
@@ -290,7 +290,7 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - 每项触发都通过一个 source-discriminated `RuleSet.getSpecialDiscardScoreTransfers` context 生成新的不可变 `ScoreTransfer[]` 快照。RuleSet 只接收玩家索引、牌面或完成风等最小只读事实，不接收 GameState、MatchState 或客户端金额。
 - 同一弃牌触发多项规则时，pending event 按规则章节稳定追加：跟打一圈、四张相同、四风归齐。Match settlement 仍只校验 typed metadata 并通用执行 transfers，不识别玩法公式、不调用 RuleSet、不重算金额。
 - 三项事件在弃牌成立时实时生成并由同一次 Match action 结算；之后的 Hu 或全 Pass 流局不会撤销已经产生的转账。对应 `HandProgressFacts` 与事件原子递增，并参与第16有效庄次额外续庄判断。
-- 本阶段未实现杠后承包或任何包子规则。
+- Phase 14C-T1 已在这些事件的最终快照边界接入杠后承包付款重定向；其他包子规则仍未实现。
 
 ## 15. 听牌纯查询与地胡报听边界
 
@@ -300,3 +300,21 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - 报听玩家只能弃 `SelfDrawProvenance` 指向的当前具体实体；声明在合法摸切、过手胡和合法等听口杠后保留。Peng 与 BuGang 禁止；MingGang 和 AnGang 必须以杠后重新计算的听牌面与声明快照完全相等为条件，并在 availability 与 action 解析时双重校验。
 - 地胡沿用 `discard`、`self-draw`、`rob-bu-gang` 三种既有胡牌来源，只作为稳定排序的 `HuPattern`。Reducer 向 RuleSet 传入当前赢家的最小声明摘要和庄家索引；RuleSet 验证赢家非庄家、和牌面命中快照后加 30 单份分，再沿用敞开头倍数与既有付款拓扑。天胡与地胡互斥。
 - 声明 Action 不产生 scoring event。胡牌继续生成携带最终 transfers 的 `hu-resolved` 事件，通用 Match settlement 不重算地胡金额；Match 仅在事务边界拒绝庄家伪造的地胡 metadata。`prepareNextHand` 通过新一轮发牌重新创建决定状态，不继承上一手队列、声明或听牌面。
+
+## 16. 杠后承包非胡实时结算边界
+
+- `GameState.gangPackage` 是 `none | active` 的单一权威状态，同一时刻至多一项 active 承包，不保存金额、转账、倒计时、事件 ID、历史或剩余回合数。active 状态只保存付款人、受益者、`ming-gang | bu-gang` 来源和建立它的真实公开杠 Meld ID。
+- 直接明杠只在响应窗口正式解析并原子创建 Meld 与计分事件后建立承包；补杠只在抢杠窗口全 Pass、原 Peng 正式升级并原子创建事件后建立。被抢补杠不建立承包，暗杠和花杠也不建立承包；已有 active 承包始终保留，不被后续杠替换或嵌套。
+- 承包经过杠尾补牌、连续补花、暗杠、补杠、花杠及 Match settlement 保持有效，直到受益者首次合法弃牌 action 完成。非法弃牌原引用 no-op；结束弃牌触发的特殊事件先使用仍有效的承包生成不可变 transfer 快照，再把状态清为 none。新手牌统一重置为 none。
+- RuleSet 继续只根据最小规则 context 生成基础 `ScoreTransfer[]`，不读取 `GameState` 或承包生命周期。Reducer 的局部纯重定向步骤在非 Hu scoring event 最终创建边界逐条处理，只把收款人为受益者的 transfer 付款人改为承包人。
+- 重定向保持 amount、receiver、事件 source、metadata、transfer 数量和顺序不变，不聚合重复付款人与收款人方向；受益者对外付款和其他 receiver 的收入不变。运行时 validator 精确拒绝多余/缺失字段、非法玩家索引、同一付款人与受益者、未知来源、空或错误 Meld 引用以及来源付款人不一致，损坏状态或 RuleSet transfer 使相关 action 事务性 no-op。
+- Match settlement 完全不读取 `gangPackage`，只验证并批量应用最终 transfer 快照；重复 payer/receiver transfer 是合法的独立份额。直接明杠、暗杠、补杠、花杠和特殊弃牌等非 Hu 实时收入不增加 `packageSettlementCount`。
+- T1 的非 Hu 重定向边界保持不变；承包有效期间不存在普通 `wall-head` 自摸：未在杠尾或补花链胡牌就必须先弃牌结束承包。
+
+## 17. 杠后承包花开 / 杠开胡牌边界
+
+- T2 只接受 active package 受益者的合法 `hua-kai` 或 `gang-kai` 自摸；两者必须互斥且与 `SelfDrawProvenance` 一致。普通墙头、初始庄家、非受益者、点炮、抢补杠及损坏来源均拒绝，不降级为普通胡牌。
+- RuleSet 接口与金额不变，仍先生成三家分别付款的三条基础 self-draw transfer；RuleSet 不读取 `gangPackage`。Reducer 在 `hu-resolved` 最终事件快照边界验证三付款人拓扑，只把三条 payer 改为承包人，receiver、amount、顺序、条数、event metadata 与 HandResult 均保持，重复方向不聚合。
+- 成功创建承包胡结果和事件时，Reducer 原子增加一次 `packageSettlementCount`；`selfDrawCount` 继续独立增加一次，只有杠开增加 `gangKaiCount`。多个 continuation 事实仍由既有 Match 决策函数统一作一次庄家推进决定，不按事实或 transfer 条数重复推进。
+- `hu-resolved` 保存重定向后的完整 transfer 快照后，Reducer 立即结束手牌并把 active package 清为 none。Match settlement 完全不读取 package，只校验并消费快照；点炮和抢补杠不适用该重定向。下一手统一重置 package、package settlement 与其他局内事实。
+- 非 Hu 实时收入仍走 T1 边界且不增加 `packageSettlementCount`。三嘴、三清、全球及其他包子仍未实现。

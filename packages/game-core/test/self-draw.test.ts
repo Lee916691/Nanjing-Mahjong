@@ -1068,7 +1068,7 @@ describe('current-reachable self-draw Hu flow', () => {
       { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 1 },
     );
     // Hu is (10 + 10 Men Qing + 30 no-flower + 20 Gang Kai + 2 soft flowers) * 2 = 148.
-    expect(settled.cumulativeScores).toEqual([832, 1464, 852, 852]);
+    expect(settled.cumulativeScores).toEqual([536, 1464, 1000, 1000]);
     expect(settled.currentHand.pendingScoringEvents).toEqual([]);
     expect(settled.currentHand.result).toMatchObject({
       source: 'self-draw',
@@ -1078,8 +1078,10 @@ describe('current-reachable self-draw Hu flow', () => {
     expect(settled.currentHand.handProgressFacts).toMatchObject({
       successfulMingOrBuGangCount: 1,
       gangKaiCount: 1,
+      packageSettlementCount: 1,
       selfDrawCount: 1,
     });
+    expect(settled.currentHand.gangPackage).toEqual({ status: 'none' });
     expect(applyGameActionToMatch(settled, { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 1 })).toBe(
       settled,
     );
@@ -1133,7 +1135,7 @@ describe('current-reachable self-draw Hu flow', () => {
       { ...createMatch(), status: 'playing', currentHandStatus: 'playing', currentHand: afterGang },
       { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 1 },
     );
-    expect(settled.cumulativeScores).toEqual([832, 1464, 852, 852]);
+    expect(settled.cumulativeScores).toEqual([536, 1464, 1000, 1000]);
     expect(settled.currentHand.pendingScoringEvents).toEqual([]);
     expect(settled.currentHand.result).toMatchObject({
       source: 'self-draw',
@@ -1143,8 +1145,10 @@ describe('current-reachable self-draw Hu flow', () => {
     expect(settled.currentHand.handProgressFacts).toMatchObject({
       successfulMingOrBuGangCount: 1,
       gangKaiCount: 1,
+      packageSettlementCount: 1,
       selfDrawCount: 1,
     });
+    expect(settled.currentHand.gangPackage).toEqual({ status: 'none' });
     expect(applyGameActionToMatch(settled, { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 1 })).toBe(
       settled,
     );

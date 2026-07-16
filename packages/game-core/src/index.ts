@@ -27,6 +27,8 @@ export type {
   GamePhase,
   GameState,
   HandProgressFacts,
+  ActiveGangPackageState,
+  GangPackageState,
   HandResult,
   DrawHandResult,
   WinHandResult,

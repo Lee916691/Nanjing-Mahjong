@@ -499,6 +499,7 @@ describe('BuGang all-pass finalize', () => {
       playerIndex: 1,
       meldId: 'meld-1',
     });
+    expect(match.currentHand.gangPackage).toEqual({ status: 'none' });
     for (const responder of match.currentHand.reactionWindow?.responderOrder ?? []) {
       match = applyGameActionToMatch(match, {
         type: 'SUBMIT_REACTION',
@@ -509,6 +510,13 @@ describe('BuGang all-pass finalize', () => {
     match = applyGameActionToMatch(match, { type: 'RESOLVE_REACTION_WINDOW' });
 
     expect(match.currentHand.players[1]?.melds[0]?.type).toBe('bu-gang');
+    expect(match.currentHand.gangPackage).toEqual({
+      status: 'active',
+      payerPlayerIndex: 0,
+      beneficiaryPlayerIndex: 1,
+      source: 'bu-gang',
+      establishedByMeldId: 'meld-1',
+    });
     expect(match.currentHand.players[1]?.buGangDrawProvenance).toEqual([]);
     expect(match.currentHand.handProgressFacts.successfulMingOrBuGangCount).toBe(1);
     expect(match.currentHand.pendingScoringEvents).toEqual([]);
@@ -666,7 +674,7 @@ describe('BuGang all-pass finalize', () => {
     }
     match = applyGameActionToMatch(match, { type: 'RESOLVE_REACTION_WINDOW' });
     expect(match.currentHand.handProgressFacts.successfulMingOrBuGangCount).toBe(2);
-    expect(match.cumulativeScores).toEqual([1040, 980, 980, 1000]);
+    expect(match.cumulativeScores).toEqual([1040, 1000, 960, 1000]);
   });
 
   it('atomically no-ops if wall, fourth tile, meld, or entity identity becomes corrupt before resolve', () => {
@@ -739,6 +747,7 @@ describe('Rob-BuGang Hu', () => {
     const resolved = respondAndResolve(declared, [2]);
 
     expect(resolved.phase).toBe('ended');
+    expect(resolved.gangPackage).toEqual({ status: 'none' });
     expect(hook).not.toHaveBeenCalled();
     hook.mockRestore();
   });

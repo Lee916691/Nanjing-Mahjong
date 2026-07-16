@@ -270,7 +270,11 @@ describe('MingGang reaction execution', () => {
       seat: 'south',
       kind: 'red-center',
       createdDuring: 'runtime-flower-replacement',
-      transfers: flowerTransfers(1),
+      transfers: [
+        { fromPlayerIndex: 0, toPlayerIndex: 1, amount: 20 },
+        { fromPlayerIndex: 0, toPlayerIndex: 1, amount: 20 },
+        { fromPlayerIndex: 0, toPlayerIndex: 1, amount: 20 },
+      ],
       status: 'pending',
     });
     expect(result.handProgressFacts).toMatchObject({
@@ -889,6 +893,7 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
     pendingScoringEvents: [],
     handProgressFacts: createGame().handProgressFacts,
     specialDiscardTracking: createGame().specialDiscardTracking,
+    gangPackage: { status: 'none' },
   };
 }
 
@@ -1460,7 +1465,7 @@ describe('Pending scoring event settlement', () => {
       currentHand: hand,
     };
     const result = applyGameActionToMatch(match, { type: 'RESOLVE_REACTION_WINDOW' });
-    expect(result.cumulativeScores).toEqual([960, 1080, 980, 980]);
+    expect(result.cumulativeScores).toEqual([920, 1080, 1000, 1000]);
     expect(playerAt(result.currentHand, 1).melds[0]?.type).toBe('ming-gang');
     expect(playerAt(result.currentHand, 0).discardPile[0]?.claimedByMeldId).toBe('meld-1');
     expect(tileIds(playerAt(result.currentHand, 1).hand)).toEqual(['tiao-5-1']);
@@ -2432,6 +2437,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingScoringEvents,
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
+      gangPackage: { status: 'none' },
     };
     const action: GameAction = { type: 'DISCARD_TILE', tileId: discardedTile.id };
     const nextState = applyAction(state, action);
@@ -2508,6 +2514,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
+      gangPackage: { status: 'none' },
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2623,6 +2630,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
+      gangPackage: { status: 'none' },
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2670,6 +2678,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
+      gangPackage: { status: 'none' },
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2717,6 +2726,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
+      gangPackage: { status: 'none' },
     };
 
     expect(
@@ -2811,6 +2821,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       pendingScoringEvents: [],
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
+      gangPackage: { status: 'none' },
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
