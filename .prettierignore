@@ -3,3 +3,6 @@ dist
 coverage
 .vite
 package-lock.json
+
+.wrangler
+.sites-runtime

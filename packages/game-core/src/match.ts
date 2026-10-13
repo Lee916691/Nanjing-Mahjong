@@ -1,12 +1,12 @@
-import { applyAction, createGame, startGame } from './engine';
-import type { GameAction } from './actions';
-import { isValidHandResult, isValidPendingHuScoringEvent } from './hu';
-import { copyPlayers, SEATS } from './player';
-import type { Seat } from './player';
-import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
-import type { RuleSetId } from './rules';
-import type { GameState, HandProgressFacts, HandResult } from './state';
-import { NUMBER_TILE_RANKS, NUMBER_TILE_SUITS, WIND_TILE_KINDS } from './state';
+import { applyAction, createGame, startGame } from './engine.js';
+import type { GameAction } from './actions.js';
+import { isValidHandResult, isValidPendingHuScoringEvent } from './hu.js';
+import { copyPlayers, SEATS } from './player.js';
+import type { Seat } from './player.js';
+import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules/index.js';
+import type { RuleSetId } from './rules/index.js';
+import type { GameState, HandProgressFacts, HandResult } from './state.js';
+import { NUMBER_TILE_RANKS, NUMBER_TILE_SUITS, WIND_TILE_KINDS } from './state.js';
 
 const FLOWER_KONG_KINDS = new Set([
   'red-center',
@@ -214,7 +214,27 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
       throw settlementError(`event ${eventIndex} status is invalid`);
     const eventDeltas = Array<number>(players.length).fill(0);
 
-    if (candidate.type === 'an-gang-created') {
+    if (candidate.type === 'package-resolved') {
+      if (
+        !isValidHandResult(candidate.result, players.length) ||
+        candidate.result.type !== 'package'
+      ) {
+        throw settlementError('Invalid forced package result');
+      }
+      const result = candidate.result;
+      if (
+        !Array.isArray(candidate.transfers) ||
+        candidate.transfers.length !== 3 ||
+        !candidate.transfers.every(
+          (t: Record<string, unknown>) =>
+            t.fromPlayerIndex === result.payerPlayerIndex &&
+            t.toPlayerIndex === result.winnerPlayerIndex &&
+            t.amount === (candidate.transfers as Record<string, unknown>[])[0]?.amount,
+        )
+      ) {
+        throw settlementError('Invalid forced package transfers');
+      }
+    } else if (candidate.type === 'an-gang-created') {
       validPlayerIndex(candidate.playerIndex, players.length, eventIndex);
       if (typeof candidate.meldId !== 'string' || candidate.meldId.trim().length === 0) {
         throw settlementError(`event ${eventIndex} meldId is invalid`);
@@ -487,6 +507,8 @@ function completionFromResult(
   facts: HandProgressFacts,
 ): HandCompletion {
   if (result.type === 'draw') return { dealerTransition: 'stay', reason: 'draw' };
+  if (result.type === 'package')
+    return { dealerTransition: 'stay', reason: 'special-no-dealer-advance' };
   if (
     result.source !== 'self-draw' &&
     (result.source === 'rob-bu-gang' || result.winners.length > 1)

@@ -1,4 +1,8 @@
 node_modules/
+data/
+backups/
+playwright-report/
+test-results/
 dist/
 coverage/
 .vite/
@@ -18,3 +22,7 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+
+.wrangler/
+.sites-runtime/
+.site-artifacts/

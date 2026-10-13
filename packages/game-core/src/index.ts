@@ -8,7 +8,7 @@ export {
   PLANT_FLOWER_KINDS,
   SEASON_FLOWER_KINDS,
   WIND_TILE_KINDS,
-} from './state';
+} from './state.js';
 export type {
   DrawTileFromWallResult,
   DrawnTileResolutionResult,
@@ -93,7 +93,7 @@ export type {
   WindTile,
   WindTileId,
   WindTileKind,
-} from './state';
+} from './state.js';
 
 export {
   DEFAULT_RULE_SET_ID,
@@ -101,7 +101,7 @@ export {
   RULE_SET_REGISTRY,
   getRuleSet,
   listRuleSets,
-} from './rules';
+} from './rules/index.js';
 export type {
   AnGangScoringContext,
   BuGangReactionAvailabilityContext,
@@ -115,11 +115,11 @@ export type {
   SpecialDiscardScoringContext,
   RuleSet,
   RuleSetId,
-} from './rules';
+} from './rules/index.js';
 
-export { SEATS, createInitialPlayers } from './player';
-export type { BuGangDrawProvenance, DiscardRecord, PlayerState, Seat } from './player';
-export type { Meld, MeldType } from './meld';
+export { SEATS, createInitialPlayers } from './player.js';
+export type { BuGangDrawProvenance, DiscardRecord, PlayerState, Seat } from './player.js';
+export type { Meld, MeldType } from './meld.js';
 
 export type {
   ClaimReactionAction,
@@ -137,8 +137,8 @@ export type {
   DiHuDecision,
   SubmitReactionAction,
   StartGameAction,
-} from './actions';
-export type { GameCreationOptions, RuleSetOptions, StartGameOptions } from './options';
+} from './actions.js';
+export type { GameCreationOptions, RuleSetOptions, StartGameOptions } from './options.js';
 
 export {
   createNanjingMahjongDeck,
@@ -157,15 +157,15 @@ export {
   resolveDrawnTileWithFlowerReplacement,
   getAvailableSelfDrawHu,
   getAvailableDiHuDecision,
-} from './reducer';
-export type { AvailableBuGang, SelfDrawHuAvailability } from './reducer';
+} from './reducer.js';
+export type { AvailableBuGang, SelfDrawHuAvailability } from './reducer.js';
 
 export {
   evaluateHuStructure,
   getWinningTileFaces,
   ordinaryTileFace,
   ordinaryTileFaceKey,
-} from './hu';
+} from './hu.js';
 export type {
   DragonSevenPairsHuStructure,
   HuConcealedMeld,
@@ -176,7 +176,7 @@ export type {
   HuTriplet,
   SevenPairsHuStructure,
   StandardHuStructure,
-} from './hu';
+} from './hu.js';
 
 export {
   advanceTurn,
@@ -185,8 +185,8 @@ export {
   createInitialGame,
   gameEngine,
   startGame,
-} from './engine';
-export type { GameEngine } from './engine';
+} from './engine.js';
+export type { GameEngine } from './engine.js';
 
 export {
   applyGameActionToMatch,
@@ -197,7 +197,7 @@ export {
   settlePendingScoringEvents,
   startCurrentHand,
   startMatch,
-} from './match';
+} from './match.js';
 export type {
   CompletedHandResult,
   DealerTransition,
@@ -210,4 +210,7 @@ export type {
   MatchState,
   MatchStatus,
   StartMatchOptions,
-} from './match';
+} from './match.js';
+
+export { explainNanjingScore } from './score-explanation.js';
+export type { ScoreBreakdown } from './score-explanation.js';

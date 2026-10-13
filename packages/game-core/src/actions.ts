@@ -1,6 +1,6 @@
-import type { Seat } from './player';
-import type { RuleSetId } from './rules/RuleSet';
-import type { OrdinaryTileFace } from './state';
+import type { Seat } from './player.js';
+import type { RuleSetId } from './rules/RuleSet.js';
+import type { OrdinaryTileFace } from './state.js';
 
 export type StartGameAction = {
   type: 'START_GAME';

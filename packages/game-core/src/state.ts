@@ -1,7 +1,8 @@
-import type { ReactionResponseType } from './actions';
-import type { HuStructure } from './hu';
-import type { PlayerState } from './player';
-import type { RuleSetId } from './rules/RuleSet';
+import type { GlobalRack } from './packages.js';
+import type { ReactionResponseType } from './actions.js';
+import type { HuStructure } from './hu.js';
+import type { PlayerState } from './player.js';
+import type { RuleSetId } from './rules/RuleSet.js';
 
 export const GAME_CORE_MODULE = 'game-core';
 
@@ -308,6 +309,7 @@ export type HuPattern =
   | 'gang-kai';
 
 export interface HuEvaluation {
+  readonly softFlowerItems?: readonly SoftFlowerItem[];
   readonly structure: HuStructure;
   readonly patterns: readonly HuPattern[];
   readonly hardFlowerCount: number;
@@ -315,6 +317,7 @@ export interface HuEvaluation {
 }
 
 export interface PendingSinglePayerHuScoringEvent {
+  readonly packageKind?: 'three-mouth' | 'three-pure' | 'global';
   readonly type: 'hu-resolved';
   readonly source: 'discard' | 'rob-bu-gang';
   readonly winnerPlayerIndex: number;
@@ -326,6 +329,7 @@ export interface PendingSinglePayerHuScoringEvent {
 }
 
 export type PendingSelfDrawHuScoringEvent = {
+  readonly packageKind?: 'three-mouth' | 'three-pure' | 'global';
   readonly type: 'hu-resolved';
   readonly source: 'self-draw';
   readonly winnerPlayerIndex: number;
@@ -356,6 +360,7 @@ export interface PendingBuGangScoringEvent {
 }
 
 export type PendingScoringEvent =
+  | PendingPackageScoringEvent
   | PendingFlowerKongScoringEvent
   | PendingMingGangScoringEvent
   | PendingAnGangScoringEvent
@@ -398,7 +403,39 @@ export type SelfDrawWinHandResult = {
 
 export type WinHandResult = SinglePayerWinHandResult | SelfDrawWinHandResult;
 
-export type HandResult = DrawHandResult | WinHandResult;
+export interface PackageEvaluation {
+  readonly softFlowerItems?: readonly SoftFlowerItem[];
+  readonly patterns: readonly HuPattern[];
+  readonly hardFlowerCount: number;
+  readonly softFlowerCount: number;
+}
+
+export type SoftFlowerKind =
+  | 'missing-suit'
+  | 'exposed-kong'
+  | 'concealed-kong'
+  | 'wind-triplet'
+  | 'closed-wait'
+  | 'edge-wait'
+  | 'single-wait';
+export interface SoftFlowerItem {
+  readonly kind: SoftFlowerKind;
+  readonly count: number;
+}
+export interface PackageHandResult {
+  readonly type: 'package';
+  readonly kind: 'three-mouth' | 'three-pure';
+  readonly winnerPlayerIndex: number;
+  readonly payerPlayerIndex: number;
+  readonly evaluation: PackageEvaluation;
+}
+export interface PendingPackageScoringEvent {
+  readonly type: 'package-resolved';
+  readonly result: PackageHandResult;
+  readonly transfers: readonly ScoreTransfer[];
+  readonly status: 'pending';
+}
+export type HandResult = DrawHandResult | WinHandResult | PackageHandResult;
 
 export interface HandProgressFacts {
   readonly successfulAnGangCount: number;
@@ -444,6 +481,7 @@ export interface DiHuDecisionAvailability {
 }
 
 export interface GameState {
+  globalRacks?: Readonly<Record<number, GlobalRack>>;
   readonly nextMeldSequence: number;
   ruleSetId: RuleSetId;
   players: PlayerState[];

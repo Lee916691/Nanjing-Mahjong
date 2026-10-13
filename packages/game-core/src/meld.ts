@@ -1,4 +1,4 @@
-import type { OrdinaryHandTile, TileId } from './state';
+import type { OrdinaryHandTile, TileId } from './state.js';
 
 export type MeldType = 'peng' | 'ming-gang' | 'an-gang' | 'bu-gang';
 

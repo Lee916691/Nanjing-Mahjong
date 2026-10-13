@@ -1,6 +1,6 @@
-import type { GameAction } from '../actions';
-import type { Meld } from '../meld';
-import type { Seat } from '../player';
+import type { GameAction } from '../actions.js';
+import type { Meld } from '../meld.js';
+import type { Seat } from '../player.js';
 import type {
   FlowerKongKind,
   GameState,
@@ -14,8 +14,8 @@ import type {
   OrdinaryTileFace,
   SelfDrawSource,
   Tile,
-} from '../state';
-import type { WindTileKind } from '../state';
+} from '../state.js';
+import type { WindTileKind } from '../state.js';
 
 export type RuleSetId = 'nanjing-open';
 

@@ -1,7 +1,8 @@
-import { createGameState, gameReducer } from './reducer';
-import type { GameAction } from './actions';
-import type { GameCreationOptions, StartGameOptions } from './options';
-import type { GameState } from './state';
+import { createGameState, gameReducer } from './reducer.js';
+import { updateRacks, packageNaturalWins, forceFourthMeld } from './packages.js';
+import type { GameAction } from './actions.js';
+import type { GameCreationOptions, StartGameOptions } from './options.js';
+import type { GameState } from './state.js';
 
 export interface GameEngine {
   createGame(options?: GameCreationOptions): GameState;
@@ -43,8 +44,11 @@ export function applyAction(state: GameState, action: GameAction): GameState {
 }
 
 function dispatch(state: GameState, action: GameAction): GameState {
-  return gameReducer(state, action);
+  return forceFourthMeld(
+    state,
+    packageNaturalWins(state, updateRacks(state, gameReducer(state, action), action)),
+  );
 }
 
-export type { GameAction } from './actions';
-export type { GameCreationOptions, RuleSetOptions, StartGameOptions } from './options';
+export type { GameAction } from './actions.js';
+export type { GameCreationOptions, RuleSetOptions, StartGameOptions } from './options.js';

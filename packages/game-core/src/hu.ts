@@ -1,7 +1,12 @@
-import type { Meld } from './meld';
-import { FOUR_COPY_INDEXES, NUMBER_TILE_RANKS, NUMBER_TILE_SUITS, WIND_TILE_KINDS } from './state';
-import type { OrdinaryHandTile, OrdinaryTileFace, SelfDrawSource } from './state';
-import type { HandResult, HuEvaluation, HuPattern, PendingHuScoringEvent } from './state';
+import type { Meld } from './meld.js';
+import {
+  FOUR_COPY_INDEXES,
+  NUMBER_TILE_RANKS,
+  NUMBER_TILE_SUITS,
+  WIND_TILE_KINDS,
+} from './state.js';
+import type { OrdinaryHandTile, OrdinaryTileFace, SelfDrawSource } from './state.js';
+import type { HandResult, HuEvaluation, HuPattern, PendingHuScoringEvent } from './state.js';
 
 export interface HuStructureInput {
   readonly concealedTiles: readonly OrdinaryHandTile[];
@@ -215,7 +220,7 @@ export function isValidOrdinaryHandTile(tile: unknown): tile is OrdinaryHandTile
   );
 }
 
-const HU_PATTERNS: readonly HuPattern[] = [
+export const HU_PATTERNS: readonly HuPattern[] = [
   'men-qing',
   'all-pungs',
   'global-single-wait',
@@ -317,6 +322,21 @@ export function isValidHuEvaluation(value: unknown): value is HuEvaluation {
 
 export function isValidHandResult(value: unknown, playerCount: number): value is HandResult {
   if (!isRecord(value) || !Number.isInteger(playerCount) || playerCount <= 0) return false;
+  if (value.type === 'package') {
+    return (
+      (value.kind === 'three-mouth' || value.kind === 'three-pure') &&
+      isPlayerIndex(value.winnerPlayerIndex, playerCount) &&
+      isPlayerIndex(value.payerPlayerIndex, playerCount) &&
+      value.winnerPlayerIndex !== value.payerPlayerIndex &&
+      isRecord(value.evaluation) &&
+      isValidHuPatterns(value.evaluation.patterns) &&
+      (value.evaluation.patterns.includes('global-single-wait') ||
+        value.evaluation.patterns.includes('all-pungs')) &&
+      isNonNegativeInteger(value.evaluation.hardFlowerCount) &&
+      isNonNegativeInteger(value.evaluation.softFlowerCount) &&
+      value.evaluation.structure === undefined
+    );
+  }
   if (value.type === 'draw') {
     return (
       value.reason === 'wall-exhausted' &&

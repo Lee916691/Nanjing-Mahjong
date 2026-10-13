@@ -1,5 +1,5 @@
-import { NANJING_OPEN_RULE_SET } from './nanjing-open';
-import type { RuleSet, RuleSetId } from './RuleSet';
+import { NANJING_OPEN_RULE_SET } from './nanjing-open.js';
+import type { RuleSet, RuleSetId } from './RuleSet.js';
 
 export const DEFAULT_RULE_SET_ID: RuleSetId = 'nanjing-open';
 
@@ -21,7 +21,7 @@ export function listRuleSets(): RuleSet[] {
   return Object.values(RULE_SET_REGISTRY);
 }
 
-export { NANJING_OPEN_RULE_SET } from './nanjing-open';
+export { NANJING_OPEN_RULE_SET } from './nanjing-open.js';
 export type {
   AnGangScoringContext,
   BuGangReactionAvailabilityContext,
@@ -35,4 +35,4 @@ export type {
   SpecialDiscardScoringContext,
   RuleSet,
   RuleSetId,
-} from './RuleSet';
+} from './RuleSet.js';

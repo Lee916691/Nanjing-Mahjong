@@ -8,15 +8,29 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w @nanjing-mahjong/server\" \"npm run dev -w @nanjing-mahjong/web\"",
-    "build": "npm run build --workspaces --if-present",
+    "dev": "wrangler dev --config wrangler.json --port 3105 --persist-to .wrangler/state --inspector-port 0",
+    "build": "npm run build -w @nanjing-mahjong/game-core && npm run build -w @nanjing-mahjong/shared-types && npm run build -w @nanjing-mahjong/web && node scripts/build-worker.mjs",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
-    "format:check": "prettier . --check"
+    "format:check": "prettier . --check",
+    "predev": "npm run build -w @nanjing-mahjong/game-core && npm run build -w @nanjing-mahjong/shared-types",
+    "pretypecheck": "npm run build -w @nanjing-mahjong/game-core && npm run build -w @nanjing-mahjong/shared-types",
+    "pretest": "npm run build -w @nanjing-mahjong/game-core && npm run build -w @nanjing-mahjong/shared-types",
+    "start": "wrangler dev --config wrangler.json --port 3105 --persist-to .wrangler/state --inspector-port 0",
+    "test:e2e": "playwright test --config playwright.site.config.ts",
+    "backup": "node --env-file-if-exists=.env apps/server/dist/backup.js",
+    "build:local": "npm run build -w @nanjing-mahjong/game-core && npm run build -w @nanjing-mahjong/shared-types && npm run build -w @nanjing-mahjong/server && npm run build -w @nanjing-mahjong/web",
+    "dev:local": "concurrently -n server,web -c blue,green \"npm run dev -w @nanjing-mahjong/server\" \"npm run dev -w @nanjing-mahjong/web\"",
+    "db:generate": "drizzle-kit generate",
+    "test:cloud": "vitest run tests/cloud",
+    "typecheck:cloud": "tsc -p cloud/tsconfig.json",
+    "db:local": "wrangler d1 migrations apply DB --local --persist-to .wrangler/state --config wrangler.json"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.13.6",
     "concurrently": "^9.1.0",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
@@ -25,6 +39,15 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.2",
-    "vitest": "^2.1.8"
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1",
+    "@cloudflare/workers-types": "4.20260515.1",
+    "wrangler": "4.92.0",
+    "esbuild": "^0.28.2",
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2"
+  },
+  "engines": {
+    "node": ">=24.0.0"
   }
 }

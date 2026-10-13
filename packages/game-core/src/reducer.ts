@@ -1,6 +1,6 @@
-import { copyPlayers, createInitialPlayers, SEATS } from './player';
-import type { PlayerState } from './player';
-import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules';
+import { copyPlayers, createInitialPlayers, SEATS } from './player.js';
+import type { PlayerState } from './player.js';
+import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules/index.js';
 import type {
   DeclareAnGangAction,
   DeclareBuGangAction,
@@ -9,14 +9,14 @@ import type {
   GameAction,
   ReactionResponseType,
   SubmitDiHuDecisionAction,
-} from './actions';
+} from './actions.js';
 import {
   getWinningTileFaces,
   isValidMeld,
   isValidOrdinaryTileFace as isValidOrdinaryTileFaceShape,
   ordinaryTileFaceKey,
-} from './hu';
-import type { GameCreationOptions, StartGameOptions } from './options';
+} from './hu.js';
+import type { GameCreationOptions, StartGameOptions } from './options.js';
 import {
   FOUR_COPY_FLOWER_KINDS,
   FOUR_COPY_INDEXES,
@@ -26,7 +26,7 @@ import {
   SEASON_FLOWER_KINDS,
   WIND_TILE_KINDS,
   isSameOrdinaryTileFace,
-} from './state';
+} from './state.js';
 import type {
   DrawTileFromWallResult,
   DrawnTileResolutionResult,
@@ -62,7 +62,7 @@ import type {
   SpecialDiscardTrackingState,
   TileWall,
   WindTile,
-} from './state';
+} from './state.js';
 
 export type {
   ClaimReactionAction,
@@ -78,7 +78,7 @@ export type {
   SubmitReactionAction,
   SubmitDiHuDecisionAction,
   StartGameAction,
-} from './actions';
+} from './actions.js';
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
   if (action.type !== 'START_GAME' && validGangPackageState(state) === null) return state;
@@ -3206,6 +3206,11 @@ function ordinaryTileFaceKeyValue(tileFace: OrdinaryTileFace): string {
 }
 
 function copyHandResult(result: HandResult): HandResult {
+  if (result.type === 'package')
+    return {
+      ...result,
+      evaluation: { ...result.evaluation, patterns: [...result.evaluation.patterns] },
+    };
   if (result.type === 'draw') return { ...result };
   if (result.source === 'self-draw') {
     return {

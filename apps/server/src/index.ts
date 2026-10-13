@@ -1,35 +1,16 @@
-import cors from 'cors';
-import express, { type Request, type Response } from 'express';
-import { createServer } from 'node:http';
-import { Server } from 'socket.io';
-
-const clientOrigin = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
+import { fileURLToPath } from 'node:url';
+import { createApp } from './app.js';
+const server = createApp({
+  dbPath:
+    process.env.DB_PATH ?? fileURLToPath(new URL('../../../data/mahjong.sqlite', import.meta.url)),
+  publicOrigin: process.env.PUBLIC_ORIGIN,
+});
 const port = Number(process.env.PORT ?? 3000);
-
-const app = express();
-
-app.use(
-  cors({
-    origin: clientOrigin,
-  }),
-);
-
-app.get('/health', (_request: Request, response: Response) => {
-  response.json({ status: 'ok' });
+server.http.listen(port, process.env.HOST ?? '0.0.0.0', () => {
+  console.log(`南京麻将已启动：http://localhost:${port}`);
 });
-
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: {
-    origin: clientOrigin,
-    methods: ['GET', 'POST'],
-  },
-});
-
-io.on('connection', (socket) => {
-  socket.emit('server:hello', { message: 'connected' });
-});
-
-httpServer.listen(port, () => {
-  console.log(`Server listening on http://localhost:${port}`);
-});
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    void server.close().then(() => process.exit(0));
+  });
+}

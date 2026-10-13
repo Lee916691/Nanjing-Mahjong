@@ -1,5 +1,5 @@
-import type { Meld } from './meld';
-import type { FlowerTile, OrdinaryHandTile } from './state';
+import type { Meld } from './meld.js';
+import type { FlowerTile, OrdinaryHandTile } from './state.js';
 
 export interface DiscardRecord {
   readonly tile: OrdinaryHandTile;

@@ -1,33 +1,34 @@
-import type { ReactionResponseType } from '../actions';
+import type { PackageEvaluation, ScoreTransfer, SoftFlowerItem, SoftFlowerKind } from '../state.js';
+import type { ReactionResponseType } from '../actions.js';
 import {
   evaluateHuStructure,
   getWinningTileFaces,
   isValidOrdinaryTileFace,
   ordinaryTileFace,
   ordinaryTileFaceKey,
-} from '../hu';
-import type { HuStructure } from '../hu';
+} from '../hu.js';
+import type { HuStructure } from '../hu.js';
 import {
   NUMBER_TILE_RANKS,
   NUMBER_TILE_SUITS,
   WIND_TILE_KINDS,
   isSameOrdinaryTileFace,
-} from '../state';
+} from '../state.js';
 import type {
   HuEvaluation,
   HuPattern,
   OrdinaryHandTile,
   OrdinaryTileFace,
   ReactionAvailability,
-} from '../state';
+} from '../state.js';
 import type {
   HuEvaluationContext,
   ReactionAvailabilityContext,
   RuleSet,
   SpecialDiscardScoringContext,
-} from './RuleSet';
+} from './RuleSet.js';
 
-const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
+export const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
   'men-qing': 10,
   'all-pungs': 30,
   'global-single-wait': 80,
@@ -42,6 +43,23 @@ const PATTERN_POINTS: Readonly<Record<HuPattern, number>> = {
   'hua-kai': 10,
   'gang-kai': 20,
 };
+
+export function forcedPackageTransfers(
+  evaluation: PackageEvaluation,
+  winner: number,
+  payer: number,
+): ScoreTransfer[] {
+  const amount =
+    2 *
+    (10 +
+      evaluation.patterns.reduce((sum, p) => sum + PATTERN_POINTS[p], 0) +
+      2 * (evaluation.hardFlowerCount + evaluation.softFlowerCount));
+  return Array.from({ length: 3 }, () => ({
+    fromPlayerIndex: payer,
+    toPlayerIndex: winner,
+    amount,
+  }));
+}
 
 export const NANJING_OPEN_RULE_SET: RuleSet = {
   id: 'nanjing-open',
@@ -306,87 +324,92 @@ function evaluateNanjingOpenHu(context: HuEvaluationContext): HuEvaluation | nul
     structure.type === 'dragon-seven-pairs';
   if (!qualifiesWithoutHardFlowers && context.flowers.length < 4) return null;
 
+  const softFlowerItems = softFlowerBreakdown(context, structure, patterns, uniqueWait);
   return {
     structure,
     patterns,
     hardFlowerCount: context.flowers.length,
-    softFlowerCount: softFlowerCount(context, structure, patterns, uniqueWait),
+    softFlowerCount: softFlowerItems.reduce((total, item) => total + item.count, 0),
+    softFlowerItems,
   };
 }
 
-function softFlowerCount(
+function softFlowerBreakdown(
   context: HuEvaluationContext,
   structure: HuStructure,
   patterns: readonly HuPattern[],
   uniqueWait: boolean,
-): number {
+): SoftFlowerItem[] {
+  const items: SoftFlowerItem[] = [];
+  const add = (kind: SoftFlowerKind, count: number) => {
+    if (count > 0) items.push({ kind, count });
+  };
   const allTiles = [
     ...context.concealedTiles,
     context.winningTile,
-    ...context.melds.flatMap((meld) => meld.tiles),
+    ...context.melds.flatMap((m) => m.tiles),
   ];
   const numberSuitCount = new Set(
-    allTiles.filter((tile) => tile.category === 'number').map((tile) => tile.suit),
+    allTiles.filter((t) => t.category === 'number').map((t) => t.suit),
   ).size;
-  let count =
+  if (
     !patterns.includes('mixed-one-suit') &&
     !patterns.includes('pure-one-suit') &&
     numberSuitCount === 2
-      ? 1
-      : 0;
-
-  for (const meld of context.melds) {
-    if (meld.type === 'ming-gang' || meld.type === 'bu-gang') count += 1;
-    if (meld.type === 'an-gang') count += 2;
-    if (meld.tiles[0]?.category === 'wind') count += 1;
-  }
-  if (structure.type === 'standard') {
-    count += structure.concealedMelds.filter(
-      (meld) => meld.type === 'triplet' && meld.tileFace.category === 'wind',
-    ).length;
-  }
-
+  )
+    add('missing-suit', 1);
+  add(
+    'exposed-kong',
+    context.melds.filter((m) => m.type === 'ming-gang' || m.type === 'bu-gang').length,
+  );
+  add('concealed-kong', context.melds.filter((m) => m.type === 'an-gang').length * 2);
+  add(
+    'wind-triplet',
+    context.melds.filter((m) => m.tiles[0]?.category === 'wind').length +
+      (structure.type === 'standard'
+        ? structure.concealedMelds.filter(
+            (m) => m.type === 'triplet' && m.tileFace.category === 'wind',
+          ).length
+        : 0),
+  );
   if (
     uniqueWait &&
-    !patterns.some((pattern) =>
+    !patterns.some((p) =>
       [
         'all-pungs',
         'global-single-wait',
         'seven-pairs',
         'dragon-seven-pairs',
         'pressure-absolute',
-      ].includes(pattern),
-    ) &&
-    isSoftWait(structure, context)
+      ].includes(p),
+    )
   ) {
-    count += 1;
+    const wait = softWaitKind(structure, context);
+    if (wait) add(wait, 1);
   }
-  return count;
+  return items;
 }
-
-function isSoftWait(structure: HuStructure, context: HuEvaluationContext): boolean {
-  if (structure.type !== 'standard') return false;
+function softWaitKind(
+  structure: HuStructure,
+  context: HuEvaluationContext,
+): SoftFlowerKind | undefined {
+  if (structure.type !== 'standard') return;
   const winningFace = ordinaryTileFace(context.winningTile);
   const winningKey = ordinaryTileFaceKey(winningFace);
   if (
     ordinaryTileFaceKey(structure.pair) === winningKey &&
-    context.concealedTiles.filter(
-      (tile) => ordinaryTileFaceKey(ordinaryTileFace(tile)) === winningKey,
-    ).length === 1
-  ) {
-    return true;
+    context.concealedTiles.filter((t) => ordinaryTileFaceKey(ordinaryTileFace(t)) === winningKey)
+      .length === 1
+  )
+    return 'single-wait';
+  if (winningFace.category !== 'number') return;
+  for (const meld of structure.concealedMelds) {
+    if (meld.type !== 'sequence') continue;
+    const ranks = meld.tiles.map((t) => (t.category === 'number' ? t.rank : 0));
+    const index = meld.tiles.findIndex((t) => ordinaryTileFaceKey(t) === winningKey);
+    if (index === 1) return 'closed-wait';
+    if ((ranks[0] === 1 && index === 2) || (ranks[0] === 7 && index === 0)) return 'edge-wait';
   }
-  if (winningFace.category !== 'number') return false;
-  return structure.concealedMelds.some((meld) => {
-    if (meld.type !== 'sequence') return false;
-    const ranks = meld.tiles.map((tile) => (tile.category === 'number' ? tile.rank : 0));
-    const winningIndex = meld.tiles.findIndex((tile) => ordinaryTileFaceKey(tile) === winningKey);
-    return (
-      winningIndex === 1 ||
-      (ranks[0] === 1 && winningIndex === 2) ||
-      (ranks[0] === 7 && winningIndex === 0)
-    );
-  });
 }
 
 function isUniqueStructuralWait(context: HuEvaluationContext): boolean {

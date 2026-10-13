@@ -1,5 +1,5 @@
-import type { Seat } from './player';
-import type { RuleSetId } from './rules';
+import type { Seat } from './player.js';
+import type { RuleSetId } from './rules/index.js';
 
 export interface GameCreationOptions {
   readonly ruleSetId?: RuleSetId;
