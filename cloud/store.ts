@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { CommandAck } from '@nanjing-mahjong/shared-types';
+import { restoreRoomRules } from '../apps/server/src/table.js';
 import type { SavedRoom } from '../apps/server/src/table.js';
 export const LEASE_MS = 6000;
 export const IDLE_MS = 30 * 60 * 1000;
@@ -50,8 +51,8 @@ export class CloudStore {
     if (!row) return { session: null, loaded: null, online: new Set(), receipt: null };
     const { room_body, room_version, online, ...session } = row;
     const room = room_body ? (JSON.parse(room_body) as CloudRoom) : null;
-    if (room && (room.cloudFormat !== 1 || room.format !== 1 || room.rules !== 'V1.0.8'))
-      throw new Error('存档版本不兼容');
+    if (room && room.cloudFormat !== 1) throw new Error('存档版本不兼容');
+    if (room) restoreRoomRules(room);
     if (session.room_id && (!room || !room.lastActivity || room.lastActivity <= now - IDLE_MS))
       return this.context(token, peer);
     const present = new Set<string>(JSON.parse(online));
@@ -104,8 +105,8 @@ export class CloudStore {
     let loaded: RequestContext['loaded'] = null;
     if (row) {
       const room = JSON.parse(row.body) as CloudRoom;
-      if (room.cloudFormat !== 1 || room.format !== 1 || room.rules !== 'V1.0.8')
-        throw new Error('存档版本不兼容');
+      if (room.cloudFormat !== 1) throw new Error('存档版本不兼容');
+      if (room) restoreRoomRules(room);
       loaded = { record: row, room };
     }
     return {
@@ -165,8 +166,8 @@ export class CloudStore {
       .first<RoomRecord>();
     if (!record) return null;
     const room = JSON.parse(record.body) as CloudRoom;
-    if (room.cloudFormat !== 1 || room.format !== 1 || room.rules !== 'V1.0.8')
-      throw new Error('存档版本不兼容');
+    if (room.cloudFormat !== 1) throw new Error('存档版本不兼容');
+    if (room) restoreRoomRules(room);
     return { record, room };
   }
   async receipt(

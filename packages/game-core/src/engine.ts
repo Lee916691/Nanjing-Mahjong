@@ -1,4 +1,4 @@
-import { createGameState, gameReducer } from './reducer.js';
+import { createGameState, createInitialThreeMouthState, gameReducer } from './reducer.js';
 import { updateRacks, packageNaturalWins, forceFourthMeld } from './packages.js';
 import type { GameAction } from './actions.js';
 import type { GameCreationOptions, StartGameOptions } from './options.js';
@@ -44,10 +44,15 @@ export function applyAction(state: GameState, action: GameAction): GameState {
 }
 
 function dispatch(state: GameState, action: GameAction): GameState {
-  return forceFourthMeld(
+  const next = forceFourthMeld(
     state,
     packageNaturalWins(state, updateRacks(state, gameReducer(state, action), action)),
   );
+  if (next === state) return state;
+  if (state.legacyThreeMouth) return { ...next, legacyThreeMouth: true };
+  return next.phase === 'ended'
+    ? { ...next, threeMouthState: createInitialThreeMouthState() }
+    : next;
 }
 
 export type { GameAction } from './actions.js';

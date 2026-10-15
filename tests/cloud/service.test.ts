@@ -1,4 +1,6 @@
-import { advance, reviewToken } from '../../apps/server/src/table';
+import { advance, apply, reviewToken } from '../../apps/server/src/table';
+import { threeMouthRoom } from '../../apps/server/test/three-mouth-fixture';
+import { CloudStore } from '../../cloud/store';
 import type { CloudRoom } from '../../cloud/store';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -158,6 +160,67 @@ async function table(env: Env) {
   return { clients, roomId };
 }
 describe('Sites D1 room service', () => {
+  it('restores a special hu opportunity after reconnect and does not settle a replay twice', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = JSON.parse(
+      String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+    ) as CloudRoom;
+    stored.match = threeMouthRoom().match;
+    apply(stored, { type: 'DISCARD_TILE', tileId: 'tong-8-1' });
+    advance(stored);
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    clients[1]!.peer = crypto.randomUUID();
+    expect((await call(env, '/api/connect', clients[1]!)).status).toBe(200);
+    const { state } = (await (await call(env, '/api/poll', clients[1]!)).json()) as {
+      state: RoomView;
+    };
+    expect(state.actions.choices.map((c) => c.kind)).toEqual(['pass', 'hu']);
+    const token = state.actions.choices.find((c) => c.kind === 'hu')!.token;
+    const commandId = crypto.randomUUID();
+    const first = await command(env, clients[1]!, 'game:action', { roomId, token }, commandId);
+    expect(first.body.ack.ok).toBe(true);
+    expect(first.body.state!.scores.at(-1)!.responsibility).toEqual({ trigger: 2, payer: 0 });
+    const beforeReplay = JSON.parse(
+      String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+    ) as CloudRoom;
+    expect(
+      (await command(env, clients[1]!, 'game:action', { roomId, token }, commandId)).body.ack,
+    ).toEqual(first.body.ack);
+    const afterReplay = JSON.parse(
+      String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+    ) as CloudRoom;
+    expect(afterReplay.scores).toEqual(beforeReplay.scores);
+    expect(afterReplay.match).toEqual(beforeReplay.match);
+  });
+  it('all D1 read paths retain a legacy match and rematch upgrades the rules', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const raw = JSON.parse(
+      String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+    );
+    raw.rules = 'V1.0.8';
+    delete raw.match.currentHand.threeMouthState;
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(raw), roomId);
+    const store = new CloudStore(env.DB);
+    const session = clients[0]!.cookie.split('=')[1]!;
+    const direct = await store.room(roomId);
+    const polled = await store.poll(session, clients[0]!.peer);
+    const context = await store.context(session, clients[0]!.peer);
+    for (const loaded of [direct, polled.loaded, context.loaded]) {
+      expect(loaded!.room.rules).toBe('V1.0.8');
+      expect(loaded!.room.match!.currentHand.legacyThreeMouth).toBe(true);
+      expect(loaded!.room.match!.cumulativeScores).toEqual(raw.match.cumulativeScores);
+    }
+    expect((await command(env, clients[0]!, 'room:end', { roomId })).body.ack.ok).toBe(true);
+    expect((await command(env, clients[0]!, 'room:rematch', { roomId })).body.ack.ok).toBe(true);
+    for (const c of clients)
+      expect((await command(env, c, 'room:ready', { roomId, ready: true })).body.ack.ok).toBe(true);
+    expect((await command(env, clients[0]!, 'room:start', { roomId })).body.ack.ok).toBe(true);
+    const next = (await store.room(roomId))!.room;
+    expect(next.rules).toBe('V1.0.10');
+    expect(next.match!.currentHand.legacyThreeMouth).toBeUndefined();
+  });
   it('joins four concurrent players, isolates hands, rejects extra and forged commands', async () => {
     const { env } = setup();
     const { clients, roomId } = await table(env);

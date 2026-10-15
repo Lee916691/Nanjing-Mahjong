@@ -317,4 +317,19 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - RuleSet 接口与金额不变，仍先生成三家分别付款的三条基础 self-draw transfer；RuleSet 不读取 `gangPackage`。Reducer 在 `hu-resolved` 最终事件快照边界验证三付款人拓扑，只把三条 payer 改为承包人，receiver、amount、顺序、条数、event metadata 与 HandResult 均保持，重复方向不聚合。
 - 成功创建承包胡结果和事件时，Reducer 原子增加一次 `packageSettlementCount`；`selfDrawCount` 继续独立增加一次，只有杠开增加 `gangKaiCount`。多个 continuation 事实仍由既有 Match 决策函数统一作一次庄家推进决定，不按事实或 transfer 条数重复推进。
 - `hu-resolved` 保存重定向后的完整 transfer 快照后，Reducer 立即结束手牌并把 active package 清为 none。Match settlement 完全不读取 package，只校验并消费快照；点炮和抢补杠不适用该重定向。下一手统一重置 package、package settlement 与其他局内事实。
-- 非 Hu 实时收入仍走 T1 边界且不增加 `packageSettlementCount`。三嘴、三清、全球及其他包子仍未实现。
+- 非 Hu 实时收入仍走 T1 边界且不增加 `packageSettlementCount`。本节记录当时的实现阶段；当前三嘴、三清和全球实现见下节。
+
+## 18. V1.0.9 三嘴与联机衔接
+
+- Reducer 为四名玩家分别保存 `tracking | active | invalid`。正式碰、直接明杠和暗杠推进状态；补杠及花杠不新增嘴。下一手重新创建三嘴状态。
+- active 后第四次碰／直接明杠机会改为同一响应窗口中的 `hu`；新摸牌形成暗杠候选改为 `DECLARE_SELF_DRAW_HU`。不建立该次副露，不计该次杠分，不消耗补牌。弃牌特殊胡可 Pass 并记录过手胡；特殊自摸通过合法弃牌放弃，不记录过手胡。active 保持到本手结束。
+- 特殊终局使用 `three-mouth-forced` 结构和 `ThreeMouthHuResolution`，保存真实触发者、来源与承包责任人。RuleSet 生成真实附加牌型、软花明细和三条付款；Match 校验后消费快照，结算不重复计数。多赢家逐人确定付款责任。
+- 自然胡仍使用真实普通结构。active 不过滤合法普通胡；`packages.ts` 仅对自然对对胡应用三嘴承包，排除抢补杠，并跳过已经具有特殊胡快照的事件。三嘴优先于三清、全球和杠后承包。
+- `forceFourthMeld` 在新规则下只处理三清，保留第四次同类明杠计分后立即结算且不补牌。全球架牌沿用已有追踪，状态复制保留架牌信息。
+- 服务端沿用签名动作令牌，无新增客户端动作。安全视图不公开三嘴内部状态；终局计分记录公开触发者、实际付款者及三份付款，网页显示对应说明。
+- V1.0.8 存档加载时添加内部 `legacyThreeMouth` 标记，原整将继续使用自动第四次碰杠结算；保持响应窗口、分数和回执。新开一将不带标记，采用当前版本。SQLite 与 D1 的所有房间读取入口均接入版本兼容，不清空数据。
+
+## 19. V1.0.10 七对计分纠正
+
+- 普通七对加分统一来自 `PATTERN_POINTS['seven-pairs'] = 40`，点炮、自摸、抢补杠、地胡叠加与网页逐项说明共用该表；龙七对保持100且不叠加普通七对。
+- V1.0.9房间加载时升级版本标记为V1.0.10，手牌、已收集响应、累计分数、历史付款和计分说明快照不重算。V1.0.8只保留三嘴流程兼容，更新后新生成的七对结算同样使用40。

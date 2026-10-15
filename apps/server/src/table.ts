@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, randomInt } from 'node:crypto';
 import {
   applyAction,
+  createGame,
   createMatch,
   completeCurrentHand,
   prepareNextHand,
@@ -23,7 +24,7 @@ export interface Member {
 export const HAND_REVIEW_MS = 45_000;
 export interface SavedRoom {
   format: 1;
-  rules: 'V1.0.8';
+  rules: 'V1.0.8' | 'V1.0.9' | 'V1.0.10';
   id: string;
   host: number;
   members: (Member | null)[];
@@ -38,7 +39,7 @@ export interface SavedRoom {
 }
 export const newRoom = (session: string, name: string): SavedRoom => ({
   format: 1,
-  rules: 'V1.0.8',
+  rules: 'V1.0.10',
   id: randomBytes(9).toString('base64url'),
   host: 0,
   members: [{ session, name, ready: false, joined: Date.now() }, null, null, null],
@@ -49,6 +50,23 @@ export const newRoom = (session: string, name: string): SavedRoom => ({
   scores: [],
   remainingMs: null,
 });
+/** Keep an existing match on its recorded rules; only start() upgrades it. */
+export function restoreRoomRules<T extends SavedRoom>(room: T): T {
+  if (room.format !== 1 || !['V1.0.8', 'V1.0.9', 'V1.0.10'].includes(room.rules))
+    throw new Error('房间存档版本不兼容');
+  if (room.rules === 'V1.0.9') room.rules = 'V1.0.10';
+  if (room.rules === 'V1.0.8' && room.match) {
+    room.match = {
+      ...room.match,
+      currentHand: {
+        ...room.match.currentHand,
+        legacyThreeMouth: true,
+        threeMouthState: createGame().threeMouthState,
+      },
+    };
+  }
+  return room;
+}
 const names: Record<string, string> = {
   east: '东',
   south: '南',
@@ -85,6 +103,7 @@ export const paused = (room: SavedRoom, online: Set<string>): boolean =>
   room.members.some((member) => !member || !online.has(member.session));
 
 export function start(room: SavedRoom): void {
+  room.rules = 'V1.0.10';
   room.match = createMatch({ dealerIndex: randomInt(4) });
   room.status = 'playing';
   room.scores = [];
@@ -102,7 +121,10 @@ function startHand(room: SavedRoom): void {
     const j = randomInt(i + 1);
     [wall[i], wall[j]] = [wall[j]!, wall[i]!];
   }
-  const game = applyAction({ ...ready.currentHand, wall }, { type: 'START_GAME' });
+  const game = applyAction(
+    { ...ready.currentHand, wall, ...(room.rules === 'V1.0.8' ? { legacyThreeMouth: true } : {}) },
+    { type: 'START_GAME' },
+  );
   room.match = { ...ready, status: 'playing', currentHandStatus: 'playing', currentHand: game };
   settle(room);
   room.epoch++;
@@ -116,7 +138,11 @@ function settle(room: SavedRoom): void {
       hand: match.currentHandIndex + 1,
       reason:
         event.type === 'hu-resolved'
-          ? [event.packageKind, event.source, ...event.evaluation.patterns]
+          ? [
+              event.threeMouthResolution ? 'three-mouth' : event.packageKind,
+              event.source,
+              ...event.evaluation.patterns,
+            ]
               .filter(Boolean)
               .join('、')
           : event.type === 'package-resolved'
@@ -130,6 +156,16 @@ function settle(room: SavedRoom): void {
         amount: t.amount,
       })),
       calculation: explainNanjingScore(event),
+      ...(event.type === 'hu-resolved' && (event.threeMouthResolution || event.packageKind)
+        ? {
+            responsibility: {
+              trigger:
+                event.threeMouthResolution?.triggerPlayerIndex ??
+                (event.source === 'self-draw' ? event.winnerPlayerIndex : event.payerPlayerIndex),
+              payer: event.transfers[0]!.fromPlayerIndex,
+            },
+          }
+        : {}),
       ...(event.type === 'hu-resolved'
         ? {
             winningHand: {

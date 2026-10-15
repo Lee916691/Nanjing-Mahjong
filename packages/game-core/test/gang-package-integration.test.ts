@@ -413,7 +413,7 @@ describe('gang package remaining public integration chains', () => {
       winners: [{ playerIndex: 3 }, { playerIndex: 1 }],
     });
     expect(match.currentHand.handProgressFacts.packageSettlementCount).toBe(0);
-    expect(match.cumulativeScores).toEqual([980, 1128, 688, 1204]);
+    expect(match.cumulativeScores).toEqual([980, 1128, 708, 1184]);
     expect(match.cumulativeScores.reduce((sum, score) => sum + score, 0)).toBe(4000);
   });
 });

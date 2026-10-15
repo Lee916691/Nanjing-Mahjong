@@ -33,6 +33,7 @@ export interface PlayerGameView {
   rack?: TileView;
 }
 export interface ScoreLine {
+  responsibility?: { trigger: number; payer: number };
   winningHand?: {
     concealed: TileView[];
     melds: { kind: string; tiles: TileView[] }[];

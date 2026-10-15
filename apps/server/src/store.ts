@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { CommandAck } from '@nanjing-mahjong/shared-types';
+import { restoreRoomRules } from './table.js';
 import type { SavedRoom } from './table.js';
 
 export class Store {
@@ -17,11 +18,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS commands(session TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL,
         PRIMARY KEY(session,id));`);
     const version = this.db.prepare("SELECT value FROM metadata WHERE key='version'").get();
-    if (version && version.value !== '1:V1.0.8') {
+    if (version && !['1:V1.0.8', '1:V1.0.9', '1:V1.0.10'].includes(String(version.value))) {
       this.db.close();
       throw new Error('存档版本不兼容，请使用对应版本恢复');
     }
-    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('version','1:V1.0.8')").run();
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('version','1:V1.0.10')").run();
     this.db
       .prepare("INSERT OR IGNORE INTO metadata VALUES ('secret',?)")
       .run(randomBytes(32).toString('hex'));
@@ -45,8 +46,7 @@ export class Store {
       .all()
       .map((row) => {
         const room = JSON.parse(String(row.body)) as SavedRoom;
-        if (room.format !== 1 || room.rules !== 'V1.0.8') throw new Error('房间存档版本不兼容');
-        return room;
+        return restoreRoomRules(room);
       });
   }
   receipt(session: string, id: string): CommandAck | undefined {
@@ -58,6 +58,8 @@ export class Store {
   commit(room: SavedRoom | undefined, session?: string, ack?: CommandAck): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      if (room?.rules === 'V1.0.10')
+        this.db.prepare("UPDATE metadata SET value='1:V1.0.10' WHERE key='version'").run();
       if (room)
         this.db
           .prepare('INSERT OR REPLACE INTO rooms VALUES (?,?)')

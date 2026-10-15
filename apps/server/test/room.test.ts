@@ -186,11 +186,11 @@ describe('authoritative room service', () => {
     await wait(() => returning.every((c) => c.state?.paused === false));
     expect(restored.rooms.get(roomId)!.match).toEqual(app.rooms.get(roomId)!.match);
   });
-  it('only the host starts/ends, and a replay does not reset scores twice', async () => {
+  it('any seated player may end, while only the host may start a rematch', async () => {
     const app = await server();
     const { clients, roomId } = await table(app.url);
-    expect((await send(clients[1]!.socket, 'room:end', { roomId })).ok).toBe(false);
-    expect((await send(clients[0]!.socket, 'room:end', { roomId })).ok).toBe(true);
+    expect((await send(clients[1]!.socket, 'room:end', { roomId })).ok).toBe(true);
+    expect((await send(clients[1]!.socket, 'room:rematch', { roomId })).ok).toBe(false);
     expect(app.rooms.get(roomId)!.status).toBe('ended');
     expect((await send(clients[0]!.socket, 'room:rematch', { roomId })).ok).toBe(true);
     expect(app.rooms.get(roomId)!.status).toBe('waiting');

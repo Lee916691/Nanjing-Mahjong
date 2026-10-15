@@ -35,7 +35,7 @@ import {
   startCurrentHand,
   startGame,
   startMatch,
-} from '../src';
+} from '../src/index.js';
 import type {
   DiscardRecord,
   FlowerTile,
@@ -56,7 +56,7 @@ import type {
   RuleSetOptions,
   StartGameOptions,
   TileId,
-} from '../src';
+} from '../src/index.js';
 
 const transfer = (fromPlayerIndex: number, toPlayerIndex: number, amount = 20) => ({
   fromPlayerIndex,
@@ -894,6 +894,7 @@ function createPlayingGameWithWall(wall: readonly MahjongTile[]): GameState {
     handProgressFacts: createGame().handProgressFacts,
     specialDiscardTracking: createGame().specialDiscardTracking,
     gangPackage: { status: 'none' },
+    threeMouthState: createGame().threeMouthState,
   };
 }
 
@@ -2438,6 +2439,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
       gangPackage: { status: 'none' },
+      threeMouthState: createGame().threeMouthState,
     };
     const action: GameAction = { type: 'DISCARD_TILE', tileId: discardedTile.id };
     const nextState = applyAction(state, action);
@@ -2515,6 +2517,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
       gangPackage: { status: 'none' },
+      threeMouthState: createGame().threeMouthState,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2631,6 +2634,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
       gangPackage: { status: 'none' },
+      threeMouthState: createGame().threeMouthState,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2679,6 +2683,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
       gangPackage: { status: 'none' },
+      threeMouthState: createGame().threeMouthState,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 
@@ -2727,6 +2732,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
       gangPackage: { status: 'none' },
+      threeMouthState: createGame().threeMouthState,
     };
 
     expect(
@@ -2822,6 +2828,7 @@ describe('Nanjing Mahjong game state and turn advancement', () => {
       handProgressFacts: createGame().handProgressFacts,
       specialDiscardTracking: createGame().specialDiscardTracking,
       gangPackage: { status: 'none' },
+      threeMouthState: createGame().threeMouthState,
     };
     const nextState = applyAction(state, { type: 'DISCARD_TILE', tileId: discardedTile.id });
 

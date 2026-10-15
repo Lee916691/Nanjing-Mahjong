@@ -24,6 +24,12 @@ export function ScoreDetails({
         </strong>
         {showHand && <span>第 {score.hand} 手</span>}
       </div>
+      {score.responsibility && (
+        <p className="score-factors">
+          {players[score.responsibility.trigger]?.name ?? '玩家'}触发本次结算， 由
+          {players[score.responsibility.payer]?.name ?? '玩家'}承包三份付款。
+        </p>
+      )}
       {score.winningHand && (
         <section className="winning-hand" aria-label="胡牌牌面">
           <div className="winning-rack">

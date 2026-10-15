@@ -64,6 +64,42 @@ function event(source: 'discard' | 'rob-bu-gang' | 'self-draw' = 'discard'): Pen
   };
 }
 describe('score explanation snapshots', () => {
+  it('retains soft-flower sources for a special hu without adding an unperformed kong', () => {
+    const resolution = NANJING_OPEN_RULE_SET.getThreeMouthForcedHuResolution({
+      source: 'discard',
+      winnerPlayerIndex: 1,
+      payerPlayerIndex: 0,
+      discarderPlayerIndex: 2,
+      playerCount: 4,
+      winningTile: tile('tong-8-1'),
+      concealedTiles: ['tong-8-2', 'tong-8-3', 'tiao-7-1'].map(tile),
+      melds: [
+        { id: 'm1', type: 'an-gang', tiles: [1, 2, 3, 4].map((n) => tile(`wind-east-${n}`)) },
+      ],
+      flowers: [],
+      allMelds: [],
+      dealerIndex: 0,
+      trigger: 'discard-peng-opportunity',
+      forcedBasePattern: 'all-pungs',
+    })!;
+    expect(resolution.evaluation.softFlowerItems).toEqual([
+      { kind: 'missing-suit', count: 1 },
+      { kind: 'concealed-kong', count: 2 },
+      { kind: 'wind-triplet', count: 1 },
+    ]);
+    expect(resolution.evaluation.softFlowerCount).toBe(4);
+    expect(
+      explainNanjingScore({
+        type: 'hu-resolved',
+        source: 'discard',
+        winnerPlayerIndex: 1,
+        payerPlayerIndex: 0,
+        winningTile: tile('tong-8-1'),
+        status: 'pending',
+        ...resolution,
+      })?.total,
+    ).toBe(resolution.transfers.reduce((sum, t) => sum + t.amount, 0));
+  });
   it('explains base + menqing + three hard flowers + missing suit, with correct arithmetic', () => {
     const e = event(),
       breakdown = explainNanjingScore(e)!;

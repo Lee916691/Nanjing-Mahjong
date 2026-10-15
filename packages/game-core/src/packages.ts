@@ -70,9 +70,14 @@ export function packageNaturalWins(before: GameState, after: GameState): GameSta
   const evaluations = new Map<number, HuEvaluation>();
   let newPackages = 0;
   const events: PendingScoringEvent[] = after.pendingScoringEvents.map((event) => {
-    if (event.type !== 'hu-resolved') return event;
+    if (event.type !== 'hu-resolved' || event.threeMouthResolution) return event;
     const player = before.players[event.winnerPlayerIndex]!;
-    const locked = threeMouth(player.melds);
+    const tracked = before.threeMouthState[event.winnerPlayerIndex];
+    const locked = before.legacyThreeMouth
+      ? threeMouth(player.melds)
+      : tracked?.status === 'active'
+        ? tracked.payerPlayerIndex
+        : null;
     const pure = threePure(player.melds);
     let payer: number | null = null,
       global = false,
@@ -186,7 +191,7 @@ export function forceFourthMeld(before: GameState, after: GameState): GameState 
       !['peng', 'ming-gang', 'an-gang'].includes(meld.type)
     )
       continue;
-    const mouth = threeMouth(old.melds),
+    const mouth = before.legacyThreeMouth ? threeMouth(old.melds) : null,
       pure = threePure(old.melds);
     const pureTrigger =
       pure !== null && meld.type !== 'an-gang' && meld.tiles.every((t) => category(t) === pure);

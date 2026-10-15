@@ -482,8 +482,8 @@ describe('Di Hu end-to-end resolution and scoring', () => {
       winningTileId: 'wind-east-2' as const,
       structure: 'seven-pairs',
       pattern: 'seven-pairs',
-      amount: 260,
-      scores: [740, 1260, 1000, 1000],
+      amount: 240,
+      scores: [760, 1240, 1000, 1000],
     },
     {
       name: 'dragon seven pairs',

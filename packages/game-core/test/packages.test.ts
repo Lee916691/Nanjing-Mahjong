@@ -111,6 +111,12 @@ describe('natural package settlement', () => {
     return {
       ...base,
       players: base.players.map((p, i) => (i === 1 ? player : p)),
+      threeMouthState: [
+        base.threeMouthState[0],
+        { status: 'active', payerPlayerIndex: 0 },
+        base.threeMouthState[2],
+        base.threeMouthState[3],
+      ],
       phase: 'ended',
       turnStage: 'hand-ended',
       result: {
@@ -162,11 +168,17 @@ describe('natural package settlement', () => {
   });
 });
 
-it('a fourth peng after three mouths ends immediately without a natural structure', () => {
+it('a fourth peng opportunity offers special hu without forming a meld', () => {
   const base = createGame();
   const melds = [meld(1), meld(2), meld(3)];
   const before: GameState = {
     ...base,
+    threeMouthState: [
+      { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+      { status: 'active', payerPlayerIndex: 0 },
+      { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+      { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+    ],
     nextMeldSequence: 4,
     phase: 'playing',
     turnStage: 'waiting-for-discard',
@@ -189,15 +201,16 @@ it('a fourth peng after three mouths ends immediately without a natural structur
     next = applyAction(next, {
       type: 'SUBMIT_REACTION',
       playerIndex: responder.playerIndex,
-      responseType: responder.playerIndex === 1 ? 'peng' : 'pass',
+      responseType: responder.playerIndex === 1 ? 'hu' : 'pass',
     });
   }
   next = applyAction(next, { type: 'RESOLVE_REACTION_WINDOW' });
   expect(next.phase).toBe('ended');
-  expect(next.result?.type).toBe('package');
-  if (next.result?.type !== 'package') throw new Error('result');
-  expect(next.result.payerPlayerIndex).toBe(0);
-  expect(next.result.evaluation.patterns).toContain('all-pungs');
+  expect(next.result?.type).toBe('win');
+  expect(next.players[1]!.melds).toHaveLength(3);
+  const hu = next.pendingScoringEvents.find((e) => e.type === 'hu-resolved')!;
+  expect(hu.transfers.every((t) => t.fromPlayerIndex === 0)).toBe(true);
+  expect(next.pendingScoringEvents.map((e) => e.type)).toEqual(['hu-resolved']);
   expect(next.wall).toEqual(before.wall);
   const match = settlePendingScoringEvents({
     ...createMatch(),
@@ -336,7 +349,7 @@ describe('package scoring combinations', () => {
   });
 });
 
-describe('fourth kong forced package timing (V1.0.8)', () => {
+describe('fourth kong and special hu timing (V1.0.9)', () => {
   function kongState(
     suppliers: number[],
     category = 'wan',
@@ -362,6 +375,14 @@ describe('fourth kong forced package timing (V1.0.8)', () => {
                   .concat([tile('tiao-7-1')])
               : [],
       })),
+      threeMouthState: [
+        { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+        suppliers.every((p) => p === suppliers[0])
+          ? { status: 'active', payerPlayerIndex: suppliers[0]! }
+          : { status: 'invalid' },
+        { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+        { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+      ],
       nextMeldSequence: 4,
     };
   }
@@ -371,30 +392,25 @@ describe('fourth kong forced package timing (V1.0.8)', () => {
       next = applyAction(next, {
         type: 'SUBMIT_REACTION',
         playerIndex: responder.playerIndex,
-        responseType: responder.playerIndex === 1 ? 'ming-gang' : 'pass',
+        responseType:
+          responder.playerIndex === 1
+            ? threeMouth(state.players[1]!.melds) === null
+              ? 'ming-gang'
+              : 'hu'
+            : 'pass',
       });
     return applyAction(next, { type: 'RESOLVE_REACTION_WINDOW' });
   }
-  it('pays the fourth ming-gang but leaves an otherwise exhausted flower tail untouched', () => {
+  it('special hu replaces the fourth ming-gang and does not pay or consume its tail', () => {
     const state = kongState([0, 0, 0]),
       next = claim(state);
-    expect(next.result?.type).toBe('package');
+    expect(next.result?.type).toBe('win');
     expect(next.wall).toEqual(state.wall);
-    expect(next.players[1]!.flowers).toEqual([]);
-    expect(next.players[1]!.hand.map((t) => t.id)).toEqual(['tiao-7-1']);
-    expect(next.pendingScoringEvents.map((e) => e.type)).toEqual([
-      'ming-gang-created',
-      'package-resolved',
-    ]);
-    expect(next.pendingScoringEvents[0]!.transfers).toEqual([
-      { fromPlayerIndex: 2, toPlayerIndex: 1, amount: 20 },
-    ]);
-    if (next.result?.type !== 'package') throw new Error('result');
-    expect(next.result.evaluation.patterns).not.toContain('gang-kai');
-    expect(next.result.evaluation.patterns).not.toContain('hua-kai');
-    expect(next.result.evaluation.patterns).toContain('all-pungs');
+    expect(next.players[1]!.melds).toHaveLength(3);
+    expect(next.players[1]!.hand).toEqual(state.players[1]!.hand);
+    expect(next.pendingScoringEvents.map((e) => e.type)).toEqual(['hu-resolved']);
     expect(next.handProgressFacts.packageSettlementCount).toBe(1);
-    expect(next.handProgressFacts.flowerKongCount).toBe(0);
+    expect(next.handProgressFacts.successfulMingOrBuGangCount).toBe(0);
   });
   it('three-pure fourth same-suit ming-gang forces pure global paid by the discarder', () => {
     const next = claim(kongState([0, 2, 3]));
@@ -404,9 +420,9 @@ describe('fourth kong forced package timing (V1.0.8)', () => {
     expect(next.result.evaluation.patterns).toContain('pure-one-suit');
     expect(next.result.evaluation.patterns).toContain('global-single-wait');
   });
-  it('three-mouth fourth an-gang keeps three gang payments and adds only one package', () => {
+  it('three-mouth fourth an-gang is replaced by self-draw hu with no gang payment', () => {
     const base = kongState([0, 0, 0], 'tong', 'wan-9-1');
-    const state = {
+    const state: GameState = {
       ...base,
       currentPlayerIndex: 1,
       pendingAction: { type: 'discard' as const, playerIndex: 1, seat: 'south' as const },
@@ -418,20 +434,24 @@ describe('fourth kong forced package timing (V1.0.8)', () => {
                 .map((n) => tile(`tong-8-${n}` as TileId))
                 .concat([tile('tiao-7-1')]),
             }
-          : p,
+          : { ...p, hand: [] },
       ),
     };
-    const next = applyAction(state, {
-      type: 'DECLARE_AN_GANG',
-      playerIndex: 1,
-      tileFace: { category: 'number', suit: 'tong', rank: 8 },
-    });
-    if (next.result?.type !== 'package') throw new Error('result');
-    expect(next.result.evaluation.patterns).toContain('global-single-wait');
+    state.selfDrawProvenance = { source: 'wall-head', playerIndex: 1, tileId: 'tong-8-4' };
+    expect(
+      applyAction(state, {
+        type: 'DECLARE_AN_GANG',
+        playerIndex: 1,
+        tileFace: { category: 'number', suit: 'tong', rank: 8 },
+      }),
+    ).toBe(state);
+    const next = applyAction(state, { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 1 });
+    expect(next.result?.type).toBe('win');
+    expect(next.players[1]!.melds).toHaveLength(3);
+    expect(next.pendingScoringEvents.map((e) => e.type)).toEqual(['hu-resolved']);
     expect(next.pendingScoringEvents[0]!.transfers).toHaveLength(3);
-    expect(next.pendingScoringEvents.at(-1)!.transfers).toHaveLength(3);
     expect(next.wall).toEqual(state.wall);
-    expect(next.handProgressFacts.successfulAnGangCount).toBe(1);
+    expect(next.handProgressFacts.successfulAnGangCount).toBe(0);
   });
   it('same-suit fourth an-gang with no three-mouth supplier continues normally', () => {
     const base = kongState([0, 2, 3], 'wan', 'tong-9-1');
@@ -471,6 +491,12 @@ it('three-mouth bu-gang tail hu uses global plus gang-kai once, with the bu-gang
     turnStage: 'waiting-for-discard',
     currentPlayerIndex: 1,
     pendingAction: { type: 'discard', playerIndex: 1, seat: 'south' },
+    threeMouthState: [
+      { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+      { status: 'active', payerPlayerIndex: 0 },
+      { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+      { status: 'tracking', mouthCount: 0, lockedPayerPlayerIndex: null },
+    ],
     nextMeldSequence: 4,
     players: base.players.map((p, i) =>
       i === 1
@@ -509,4 +535,42 @@ it('three-mouth bu-gang tail hu uses global plus gang-kai once, with the bu-gang
   expect(ended.pendingScoringEvents.filter((e) => e.type === 'bu-gang-created')).toHaveLength(1);
   expect(ended.handProgressFacts.packageSettlementCount).toBe(1);
   expect(ended.handProgressFacts.gangKaiCount).toBe(1);
+});
+
+it('legacy in-progress games retain the automatic fourth-meld rule', () => {
+  const base = createGame();
+  const state: GameState = {
+    ...base,
+    legacyThreeMouth: true,
+    phase: 'playing',
+    turnStage: 'waiting-for-discard',
+    currentPlayerIndex: 2,
+    pendingAction: { type: 'discard', playerIndex: 2, seat: 'west' },
+    nextMeldSequence: 4,
+    wall: [tile('wan-9-1')],
+    players: base.players.map((p, i) => ({
+      ...p,
+      melds: i === 1 ? [meld(1), meld(2), meld(3)] : [],
+      hand:
+        i === 2
+          ? [tile('tong-8-1')]
+          : i === 1
+            ? [tile('tong-8-2'), tile('tong-8-3'), tile('wan-5-1'), tile('tiao-7-1')]
+            : [],
+    })),
+  };
+  let next = applyAction(state, { type: 'DISCARD_TILE', tileId: 'tong-8-1' });
+  expect(
+    next.reactionWindow!.availableReactions.find((r) => r.playerIndex === 1)!.responseTypes,
+  ).toContain('peng');
+  for (const r of next.reactionWindow!.responderOrder)
+    next = applyAction(next, {
+      type: 'SUBMIT_REACTION',
+      playerIndex: r.playerIndex,
+      responseType: r.playerIndex === 1 ? 'peng' : 'pass',
+    });
+  next = applyAction(next, { type: 'RESOLVE_REACTION_WINDOW' });
+  expect(next.result?.type).toBe('package');
+  expect(next.players[1]!.melds).toHaveLength(4);
+  expect(next.legacyThreeMouth).toBe(true);
 });
