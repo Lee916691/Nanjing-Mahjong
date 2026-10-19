@@ -65,7 +65,7 @@ describe('three-mouth multiplayer integration', () => {
     room.reactions['1'] = 'pass';
     advance(room);
     const restored = restoreRoomRules(JSON.parse(JSON.stringify(room)));
-    expect(restored.match!.currentHand.threeMouthState[1]).toEqual({
+    expect(restored.match!.currentHand.threeMouthState[1]!).toEqual({
       status: 'active',
       payerPlayerIndex: 0,
     });
@@ -78,7 +78,7 @@ describe('three-mouth multiplayer integration', () => {
     expect(actions.some((c) => c.action.type === 'DECLARE_SELF_DRAW_HU')).toBe(true);
     expect(actions.some((c) => c.action.type === 'DECLARE_AN_GANG')).toBe(false);
     apply(room, { type: 'DISCARD_TILE', tileId: 'tong-8-4' });
-    expect(room.match!.currentHand.threeMouthState[1].status).toBe('active');
+    expect(room.match!.currentHand.threeMouthState[1]!.status).toBe('active');
     expect(room.scores).toEqual([]);
   });
   it('loads V1.0.8 without changing scores or pending responses, then uses V1.0.11 for a new match', () => {
@@ -128,7 +128,7 @@ describe('three-mouth multiplayer integration', () => {
         expect(store.rooms()[0]).toEqual(restored);
         expect(
           store.db.prepare("SELECT value FROM metadata WHERE key='version'").get()?.value,
-        ).toBe('1:V1.0.11');
+        ).toBe('2:room-modes');
       } finally {
         store.close();
       }

@@ -1,5 +1,6 @@
 import { advance, apply, appendTableEvents, reviewToken } from '../../apps/server/src/table';
 import { threeMouthRoom } from '../../apps/server/test/three-mouth-fixture';
+import { prepareTwoPlayerWin } from '../../apps/server/test/two-player-fixture';
 import {
   buGangRoom,
   eventRoom,
@@ -157,9 +158,12 @@ async function command(
     },
   };
 }
-async function table(env: Env) {
-  const clients = await Promise.all(Array.from({ length: 4 }, () => client(env)));
-  const created = await command(env, clients[0]!, 'room:create', { name: '房主' });
+async function table(env: Env, duo = false) {
+  const clients = await Promise.all(Array.from({ length: duo ? 2 : 4 }, () => client(env)));
+  const created = await command(env, clients[0]!, 'room:create', {
+    name: '房主',
+    ...(duo ? { ruleSetId: 'nanjing-open-duo' } : {}),
+  });
   expect(created.body.ack.ok).toBe(true);
   const roomId = created.body.ack.roomId!;
   await Promise.all(
@@ -180,6 +184,204 @@ async function table(env: Env) {
   return { clients, roomId };
 }
 describe('Sites D1 room service', () => {
+  it('commits self-draw flowers once, rolls back failed receipts and restores two-player review confirmations', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env, true);
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    const winner = prepareTwoPlayerWin(stored);
+    apply(stored, { type: 'DRAW_TILE' });
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const winnerClient = clients[winner]!;
+    const polled = (
+      (await (await call(env, '/api/poll', winnerClient)).json()) as { state: RoomView }
+    ).state;
+    const token = polled.actions.choices.find((choice) => choice.kind === 'hu')!.token;
+    const commandId = crypto.randomUUID();
+    const args = { roomId, token };
+    const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+    db.db.exec(
+      "CREATE TRIGGER fail_duo_receipt BEFORE INSERT ON cloud_commands BEGIN SELECT RAISE(ABORT,'failure'); END;",
+    );
+    expect((await command(env, winnerClient, 'game:action', args, commandId)).response.status).toBe(
+      503,
+    );
+    expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+    db.db.exec('DROP TRIGGER fail_duo_receipt');
+    const accepted = await command(env, winnerClient, 'game:action', args, commandId);
+    expect(accepted.body.ack.ok).toBe(true);
+    const state = accepted.body.state!;
+    const score = state.scores.at(-1)!;
+    expect(score.calculation).toMatchObject({
+      payments: 1,
+      total: 60,
+      terms: expect.arrayContaining([{ label: '自摸加花 2 花', points: 4 }]),
+    });
+    expect(score.transfers).toEqual([{ from: 1 - winner, to: winner, amount: 60 }]);
+    const replay = await command(env, winnerClient, 'game:action', args, commandId);
+    expect(replay.body.ack).toEqual(accepted.body.ack);
+    expect(replay.body.state!.players.map((player) => player!.score)).toEqual(
+      state.players.map((player) => player!.score),
+    );
+    const review = { roomId, token: state.nextHandToken };
+    expect(
+      (await command(env, clients[0]!, 'room:next-ready', review)).body.state!.nextHandReady,
+    ).toEqual([0]);
+    const store = new CloudStore(env.DB);
+    const loaded = (await store.room(roomId))!.room;
+    expect(loaded.nextHandReady).toEqual([0]);
+    await store.disconnect(clients[1]!.cookie.split('=')[1]!, clients[1]!.peer);
+    const paused = (
+      (await (await call(env, '/api/poll', clients[0]!)).json()) as { state: RoomView }
+    ).state;
+    expect(paused.paused).toBe(true);
+    expect((await store.room(roomId))!.room.remainingMs).toBe(loaded.remainingMs);
+    await call(env, '/api/connect', clients[1]!);
+    const next = await command(env, clients[1]!, 'room:next-ready', review);
+    expect(next.body.ack.ok).toBe(true);
+    expect(next.body.state!.hand).toBe(state.hand + 1);
+    expect(next.body.state!.ruleSetId).toBe('nanjing-open-duo');
+    expect((await command(env, clients[0]!, 'room:next-ready', review)).body.ack.error?.code).toBe(
+      'STALE_ACTION',
+    );
+  });
+  it.each(['missing-mode', 'wrong-player-count', 'wrong-rule-version'])(
+    'rejects %s through every D1 read and HTTP entry without rewriting the room or receipts',
+    async (kind) => {
+      const { env, db } = setup();
+      const c = await client(env);
+      const created = await command(env, c, 'room:create', {
+        name: '双人房主',
+        ruleSetId: 'nanjing-open-duo',
+      });
+      const roomId = created.body.ack.roomId!;
+      const raw = JSON.parse(
+        String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+      );
+      if (kind === 'missing-mode') delete raw.ruleSetId;
+      if (kind === 'wrong-player-count') raw.members.push(null);
+      if (kind === 'wrong-rule-version') raw.rules = 'V1.0.11';
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(raw), roomId);
+      const row = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      const receipts = db.db.prepare('SELECT * FROM cloud_commands ORDER BY session,id').all();
+      const store = new CloudStore(env.DB);
+      const session = c.cookie.split('=')[1]!;
+      for (const read of [
+        () => store.room(roomId),
+        () => store.poll(session, c.peer),
+        () => store.context(session, c.peer),
+      ])
+        await expect(read()).rejects.toThrow('玩法存档');
+      for (const path of ['/api/poll', '/api/connect', '/api/stream', '/api/command']) {
+        const response = await call(env, path, c, {
+          event: 'room:end',
+          command: { commandId: crypto.randomUUID(), roomId },
+        });
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({
+          error: { code: 'ROOM_MODE_ARCHIVE_INCOMPATIBLE' },
+        });
+      }
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(row);
+      expect(db.db.prepare('SELECT * FROM cloud_commands ORDER BY session,id').all()).toEqual(
+        receipts,
+      );
+    },
+  );
+
+  it('closes an already-open two-player stream with a clear error if mode data becomes corrupt', async () => {
+    const { env, db } = setup();
+    const c = await client(env);
+    const created = await command(env, c, 'room:create', {
+      name: '双人',
+      ruleSetId: 'nanjing-open-duo',
+    });
+    const roomId = created.body.ack.roomId!;
+    const response = await call(env, '/api/stream', c);
+    const reader = response.body!.getReader();
+    const next = async () => JSON.parse(new TextDecoder().decode((await reader.read()).value));
+    try {
+      expect((await next()).state.ruleSetId).toBe('nanjing-open-duo');
+      db.db
+        .prepare("UPDATE cloud_rooms SET body=json_remove(body,'$.ruleSetId') WHERE id=?")
+        .run(roomId);
+      const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      expect(await next()).toMatchObject({ error: { code: 'ROOM_MODE_ARCHIVE_INCOMPATIBLE' } });
+      expect((await reader.read()).done).toBe(true);
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+    } finally {
+      await reader.cancel();
+    }
+  });
+  it('creates a two-seat mode, rejects mode changes and extra members, and persists an idempotent mode fingerprint', async () => {
+    const { env, db } = setup();
+    const clients = await Promise.all([client(env), client(env), client(env)]);
+    const args = { name: '双人房主', ruleSetId: 'nanjing-open-duo' };
+    const commandId = crypto.randomUUID();
+    const created = await command(env, clients[0]!, 'room:create', args, commandId);
+    expect(created.body.ack.ok).toBe(true);
+    expect(created.body.state).toMatchObject({
+      ruleSetId: 'nanjing-open-duo',
+      totalEffectiveDealerTurns: 8,
+    });
+    expect(created.body.state!.players).toHaveLength(2);
+    const roomId = created.body.ack.roomId!;
+    expect((await command(env, clients[0]!, 'room:create', args, commandId)).body.ack).toEqual(
+      created.body.ack,
+    );
+    expect(
+      (
+        await command(
+          env,
+          clients[0]!,
+          'room:create',
+          { ...args, ruleSetId: 'nanjing-open' },
+          commandId,
+        )
+      ).body.ack.error?.code,
+    ).toBe('DUPLICATE_ID');
+    expect(
+      (
+        await command(env, clients[1]!, 'room:join', {
+          roomId,
+          name: '对手',
+          ruleSetId: 'nanjing-open',
+        })
+      ).body.ack.error?.code,
+    ).toBe('BAD_REQUEST');
+    expect(
+      (await command(env, clients[1]!, 'room:join', { roomId, name: '对手' })).body.ack.ok,
+    ).toBe(true);
+    expect(
+      (await command(env, clients[2]!, 'room:join', { roomId, name: '第三人' })).body.ack.error
+        ?.code,
+    ).toBe('ROOM_FULL');
+    expect((await command(env, clients[0]!, 'room:start', { roomId })).body.ack.error?.code).toBe(
+      'NOT_READY',
+    );
+    for (const c of clients.slice(0, 2))
+      await command(env, c!, 'room:ready', { roomId, ready: true });
+    const started = await command(env, clients[0]!, 'room:start', { roomId });
+    expect(started.body.ack.ok).toBe(true);
+    expect(started.body.state!.players).toHaveLength(2);
+    expect(started.body.state!.players[1]!.hand).toBeUndefined();
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    expect(stored).toMatchObject({ format: 2, ruleSetId: 'nanjing-open-duo', rules: 'V1.0.12' });
+    const before = JSON.stringify(stored.match);
+    const poll = await call(env, '/api/poll', clients[1]!);
+    const state = ((await poll.json()) as { state: RoomView }).state;
+    expect(state.ruleSetId).toBe('nanjing-open-duo');
+    expect(state.players[0]!.hand).toBeUndefined();
+    expect(JSON.stringify((await new CloudStore(env.DB).room(roomId))!.room.match)).toBe(before);
+    expect(db.db.prepare('SELECT COUNT(*) AS count FROM cloud_rooms').get()?.count).toBe(1);
+  });
+
+  it.each([null, 'unknown', 2])('rejects an invalid explicit room mode: %s', async (ruleSetId) => {
+    const { env } = setup();
+    const c = await client(env);
+    expect(
+      (await command(env, c, 'room:create', { name: '双人', ruleSetId })).body.ack.error?.code,
+    ).toBe('BAD_REQUEST');
+  });
   it('sends public kong faces without entity IDs in command, replay, poll, connect and live NDJSON', async () => {
     const { env, db } = setup();
     const { clients, roomId } = await table(env);

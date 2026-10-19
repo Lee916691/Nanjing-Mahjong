@@ -112,10 +112,10 @@ describe('natural package settlement', () => {
       ...base,
       players: base.players.map((p, i) => (i === 1 ? player : p)),
       threeMouthState: [
-        base.threeMouthState[0],
+        base.threeMouthState[0]!,
         { status: 'active', payerPlayerIndex: 0 },
-        base.threeMouthState[2],
-        base.threeMouthState[3],
+        base.threeMouthState[2]!,
+        base.threeMouthState[3]!,
       ],
       phase: 'ended',
       turnStage: 'hand-ended',

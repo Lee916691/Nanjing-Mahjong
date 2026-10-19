@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { io } from './cloud-socket';
 import type { CloudSocket as Socket } from './cloud-socket';
-import type { RoomView, RoomEvent, RoomCommand, CommandAck } from '@nanjing-mahjong/shared-types';
+import type {
+  RoomView,
+  RoomEvent,
+  RoomCommand,
+  CommandAck,
+  RoomRuleSetId,
+} from '@nanjing-mahjong/shared-types';
+import { isSupportedRoomMode, roomModeName } from './room-mode';
 
 import { MahjongTile as Tile } from './MahjongTile';
 import { MahjongTable } from './MahjongTable';
@@ -76,6 +83,7 @@ export function App() {
     new URLSearchParams(location.search).has('room') ? 'join' : 'create',
   );
   const [customCode, setCustomCode] = useState('');
+  const [ruleSetId, setRuleSetId] = useState<RoomRuleSetId>('nanjing-open');
   const [connected, setConnected] = useState(false);
   const [message, setMessage] = useState('');
   const [pending, setPending] = useState(false);
@@ -176,6 +184,11 @@ export function App() {
           setMessage('你的座位已在另一页面打开。关闭另一页面后刷新可接管。');
         });
         socket.on('room:state', (value: RoomView) => {
+          if (!isSupportedRoomMode(value)) {
+            setMessage('房间玩法或人数与当前页面不兼容，请刷新页面后重试。');
+            socket?.disconnect();
+            return;
+          }
           setTableHistory((previous) => updateTableHistory(previous, value));
           const previous = roomRef.current;
           if (
@@ -281,7 +294,13 @@ export function App() {
     }
   }
   return (
-    <main className={room?.status === 'playing' && !away ? 'game-shell' : 'shell'}>
+    <main
+      className={
+        room?.status === 'playing' && !away
+          ? `game-shell${room.ruleSetId === 'nanjing-open-duo' ? ' game-shell--duo' : ''}`
+          : 'shell'
+      }
+    >
       <header className="header">
         <a
           href="/"
@@ -378,10 +397,14 @@ export function App() {
             </article>
             <article>
               <b>02 · 开一将</b>
-              <h2>四人准备，房主开局</h2>
+              <h2>好友准备，房主开局</h2>
               <p>
                 南京敞开头 V1.0.11。每人从 1000 分开始，一将按 16
                 个有效庄次推进；连庄时手数与庄次不同。
+              </p>
+              <p>
+                创建时也可选择双人敞开头 V1.0.12：完整144张、8个有效庄次，保留第8庄特殊续庄。
+                胡牌和包子收一份，自摸及按自摸结算的包子加2软花；暗杠付20分，跟打一圈和四风归齐停用。
               </p>
             </article>
             <article>
@@ -407,9 +430,9 @@ export function App() {
       ) : !room ? (
         <section className="landing">
           <div className="intro">
-            <span className="eyebrow">一张牌桌，四位老友</span>
+            <span className="eyebrow">一张牌桌，老友同坐</span>
             <h1>
-              凑齐四人，
+              约好朋友，
               <br />
               开一将。
             </h1>
@@ -429,8 +452,8 @@ export function App() {
               ))}
             </div>
             <div className="features">
-              <span>四人好友房</span>
-              <span>完整 16 庄次</span>
+              <span>双人 / 四人好友房</span>
+              <span>完整 8 / 16 庄次</span>
               <span>掉线可续局</span>
             </div>
           </div>
@@ -441,11 +464,26 @@ export function App() {
               command(page === 'join' ? 'room:join' : 'room:create', {
                 name,
                 roomId: (page === 'join' ? roomId.trim() : customCode.trim()) || undefined,
+                ...(page === 'create' ? { ruleSetId } : {}),
               });
             }}
           >
             <span className="eyebrow">{page === 'join' ? '朋友正在等你' : '准备入座'}</span>
             <h2>{page === 'join' ? '加入好友房间' : '创建一张牌桌'}</h2>
+            {page === 'create' && (
+              <>
+                <label htmlFor="room-mode">玩法模式</label>
+                <select
+                  id="room-mode"
+                  value={ruleSetId}
+                  onChange={(event) => setRuleSetId(event.target.value as RoomRuleSetId)}
+                  disabled={pending}
+                >
+                  <option value="nanjing-open">四人敞开头 · 16个有效庄次</option>
+                  <option value="nanjing-open-duo">双人敞开头 · 8个有效庄次</option>
+                </select>
+              </>
+            )}
             <label htmlFor="name">你的昵称</label>
             <input
               id="name"
@@ -472,7 +510,7 @@ export function App() {
             />
             <p className="entry-hint">
               {page === 'join'
-                ? '旧房间号区分大小写，请完整输入。'
+                ? '旧房间号区分大小写，请完整输入。玩法由房间决定，入座后显示。'
                 : '选个好记的号码，和朋友约好就入座。'}
             </p>
             <button className="primary" disabled={!connected || pending || !name.trim()}>
@@ -487,7 +525,9 @@ export function App() {
         <>
           <section className="room-bar">
             <div>
-              <span className="eyebrow">好友房 · {room.id}</span>
+              <span className="eyebrow">
+                好友房 · {room.id} · {roomModeName(room)}
+              </span>
               <h2>
                 {room.status === 'waiting'
                   ? '等朋友，开好局'
@@ -495,7 +535,7 @@ export function App() {
                     ? room.status === 'ended'
                       ? '本将已提前结束'
                       : '一将圆满结束'
-                    : `第 ${room.hand} 手 · 第 ${room.effectiveTurn} / 16 有效庄次`}
+                    : `第 ${room.hand} 手 · 第 ${room.effectiveTurn} / ${room.totalEffectiveDealerTurns} 有效庄次`}
               </h2>
             </div>
             <div className="buttons">
@@ -527,10 +567,20 @@ export function App() {
           </section>
           {room.status === 'waiting' ? (
             <section className="waiting">
-              <div className="seat-grid">
+              <div
+                className={
+                  room.ruleSetId === 'nanjing-open-duo' ? 'seat-grid seat-grid--duo' : 'seat-grid'
+                }
+              >
                 {room.players.map((player, i) => (
                   <article className={'seat-card ' + (i === room.self ? 'you' : '')} key={i}>
-                    <span className="seat-wind">{seats[i]}</span>
+                    <span className="seat-wind">
+                      {room.ruleSetId === 'nanjing-open-duo'
+                        ? i === room.self
+                          ? '你'
+                          : '对手'
+                        : seats[i]}
+                    </span>
                     <h3>{player?.name ?? '虚位以待'}</h3>
                     <p>
                       {player
@@ -561,12 +611,13 @@ export function App() {
                     disabled={!enabled || room.players.some((p) => !p?.connected || !p.ready)}
                     onClick={() => command('room:start')}
                   >
-                    四人开局
+                    {room.ruleSetId === 'nanjing-open-duo' ? '双人' : '四人'}开局
                   </button>
                 )}
               </div>
               <p className="muted centered">
-                四人在线并准备后，由房主开局。开局庄家随机，分数从 1000 开始。
+                {room.ruleSetId === 'nanjing-open-duo' ? '两人' : '四人'}
+                在线并准备后，由房主开局。开局庄家随机，分数从 1000 开始。
               </p>
             </section>
           ) : (
@@ -623,6 +674,7 @@ export function App() {
                             score={score}
                             players={room.players}
                             readable={readable}
+                            ruleSetId={room.ruleSetId}
                           />
                         ))}
                     </section>
@@ -663,6 +715,7 @@ export function App() {
                     score={s}
                     players={room.players}
                     readable={readable}
+                    ruleSetId={room.ruleSetId}
                     showHand
                   />
                 ))}
@@ -769,7 +822,7 @@ export function App() {
         </div>
       )}
       <footer>
-        南京麻将 · 敞开头 V1.0.8 <span>好友相聚，轻松一将</span>
+        南京麻将 · 敞开头好友局 <span>好友相聚，轻松一将</span>
       </footer>
     </main>
   );

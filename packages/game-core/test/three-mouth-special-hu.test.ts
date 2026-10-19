@@ -68,10 +68,10 @@ function specialDiscardState(fromPlayerIndex = 0, matchingCount: 2 | 3 = 2): Gam
       type: 'discard',
     },
     threeMouthState: [
-      base.threeMouthState[0],
+      base.threeMouthState[0]!,
       { status: 'active', payerPlayerIndex: 0 },
-      base.threeMouthState[2],
-      base.threeMouthState[3],
+      base.threeMouthState[2]!,
+      base.threeMouthState[3]!,
     ],
   };
 }
@@ -121,10 +121,10 @@ function specialSelfDrawState(): GameState {
     pendingAction: { playerIndex: 1, seat: 'south', type: 'discard' },
     selfDrawProvenance: { playerIndex: 1, tileId: 'wan-9-4', source: 'wall-head' },
     threeMouthState: [
-      base.threeMouthState[0],
+      base.threeMouthState[0]!,
       { status: 'active', payerPlayerIndex: 0 },
-      base.threeMouthState[2],
-      base.threeMouthState[3],
+      base.threeMouthState[2]!,
+      base.threeMouthState[3]!,
     ],
   };
 }
@@ -180,10 +180,10 @@ function activeFromRealThirdPeng(): GameState {
     turnStage: 'waiting-for-discard',
     pendingAction: { playerIndex: 0, seat: 'east', type: 'discard' },
     threeMouthState: [
-      base.threeMouthState[0],
+      base.threeMouthState[0]!,
       { status: 'tracking', mouthCount: 2, lockedPayerPlayerIndex: 0 },
-      base.threeMouthState[2],
-      base.threeMouthState[3],
+      base.threeMouthState[2]!,
+      base.threeMouthState[3]!,
     ],
   };
   let opened = applyAction(before, { type: 'DISCARD_TILE', tileId: 'wan-3-1' });
@@ -195,7 +195,7 @@ function activeFromRealThirdPeng(): GameState {
     });
   }
   const active = applyAction(opened, { type: 'RESOLVE_REACTION_WINDOW' });
-  expect(active.threeMouthState[1]).toEqual({ status: 'active', payerPlayerIndex: 0 });
+  expect(active.threeMouthState[1]!).toEqual({ status: 'active', payerPlayerIndex: 0 });
   expect(active.players[1]?.melds).toHaveLength(3);
   return active;
 }
@@ -363,7 +363,7 @@ describe('B. special Hu pass and self-draw semantics', () => {
     const submitted = submitAll(opened, 'pass');
     expect(submitted.players[1]?.passHu).toBe(true);
     const resolved = applyAction(submitted, { type: 'RESOLVE_REACTION_WINDOW' });
-    expect(resolved.threeMouthState[1]).toEqual({ status: 'active', payerPlayerIndex: 0 });
+    expect(resolved.threeMouthState[1]!).toEqual({ status: 'active', payerPlayerIndex: 0 });
     expect(resolved.players[1]?.melds).toHaveLength(3);
     expect(resolved.players[0]?.discardPile.at(-1)?.claimedByMeldId).toBeUndefined();
     expect(resolved.handProgressFacts).toMatchObject({
@@ -452,7 +452,7 @@ describe('B. special Hu pass and self-draw semantics', () => {
     const state = specialSelfDrawState();
     const discarded = applyAction(state, { type: 'DISCARD_TILE', tileId: 'tiao-9-1' });
     expect(discarded.players[1]?.passHu).toBe(false);
-    expect(discarded.threeMouthState[1]).toEqual({ status: 'active', payerPlayerIndex: 0 });
+    expect(discarded.threeMouthState[1]!).toEqual({ status: 'active', payerPlayerIndex: 0 });
     expect(discarded.selfDrawProvenance).toBeUndefined();
     expect(discarded.pendingScoringEvents).toEqual([]);
     expect(discarded.handProgressFacts).toMatchObject({

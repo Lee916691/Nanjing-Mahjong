@@ -1,5 +1,3 @@
-import { SEATS } from './player.js';
-
-export function nextSeatIndex(currentPlayerIndex: number): number {
-  return (currentPlayerIndex + 1) % SEATS.length;
+export function nextSeatIndex(currentPlayerIndex: number, playerCount = 4): number {
+  return (currentPlayerIndex + 1) % playerCount;
 }

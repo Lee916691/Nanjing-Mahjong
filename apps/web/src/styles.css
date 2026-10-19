@@ -158,13 +158,18 @@ a {
   font-size: 13px;
   margin-bottom: 10px;
 }
-.entry-card input {
+.entry-card input,
+.entry-card select {
   width: 100%;
   padding: 14px;
   border: 1px solid #d7ddcf;
   background: #fbfbf5;
   border-radius: 7px;
   outline-color: #508166;
+}
+.entry-card select {
+  font: inherit;
+  margin-bottom: 16px;
 }
 .entry-card button {
   width: 100%;
@@ -210,6 +215,9 @@ a {
   grid-template-columns: repeat(4, 1fr);
   gap: 20px;
   margin: 45px 0;
+}
+.seat-grid--duo {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .seat-card {
   position: relative;

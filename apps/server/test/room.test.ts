@@ -82,6 +82,43 @@ async function table(url: string) {
   return { clients, roomId };
 }
 describe('authoritative room service', () => {
+  it('starts a two-player room and binds new Node receipts to the selected mode', async () => {
+    const app = await server();
+    const players = await Promise.all([client(app.url), client(app.url), client(app.url)]);
+    const commandId = randomUUID();
+    const args = { commandId, name: '双人房主', ruleSetId: 'nanjing-open-duo' };
+    const created = await send(players[0]!.socket, 'room:create', args);
+    expect(created.ok).toBe(true);
+    expect(await send(players[0]!.socket, 'room:create', args)).toEqual(created);
+    expect(
+      (await send(players[0]!.socket, 'room:create', { ...args, ruleSetId: 'nanjing-open' })).error
+        ?.code,
+    ).toBe('DUPLICATE_ID');
+    const roomId = created.roomId!;
+    expect(
+      (
+        await send(players[1]!.socket, 'room:join', {
+          roomId,
+          name: '对手',
+          ruleSetId: 'nanjing-open',
+        })
+      ).error?.code,
+    ).toBe('BAD_REQUEST');
+    expect((await send(players[1]!.socket, 'room:join', { roomId, name: '对手' })).ok).toBe(true);
+    expect(
+      (await send(players[2]!.socket, 'room:join', { roomId, name: '第三人' })).error?.code,
+    ).toBe('ROOM_FULL');
+    for (const player of players.slice(0, 2))
+      await send(player.socket, 'room:ready', { roomId, ready: true });
+    expect((await send(players[0]!.socket, 'room:start', { roomId })).ok).toBe(true);
+    await wait(() => players[0]!.state?.status === 'playing');
+    expect(players[0]!.state).toMatchObject({
+      ruleSetId: 'nanjing-open-duo',
+      totalEffectiveDealerTurns: 8,
+    });
+    expect(players[0]!.state!.players).toHaveLength(2);
+    expect(players[0]!.state!.players[1]!.hand).toBeUndefined();
+  });
   it.each(['flower-kong', 'four-winds-gathered', 'follow-discard'] as const)(
     'commits %s with its receipt once and restores all public views after a failed write',
     async (rule) => {

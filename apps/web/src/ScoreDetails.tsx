@@ -1,16 +1,18 @@
 import { MahjongTile } from './MahjongTile';
-import type { PlayerGameView, PublicScoreLine } from '@nanjing-mahjong/shared-types';
+import type { PlayerGameView, PublicScoreLine, RoomRuleSetId } from '@nanjing-mahjong/shared-types';
 
 export function ScoreDetails({
   score,
   players,
   readable,
   showHand = false,
+  ruleSetId = 'nanjing-open',
 }: {
   score: PublicScoreLine;
   players: (PlayerGameView | null)[];
   readable: (value: string) => string;
   showHand?: boolean;
+  ruleSetId?: RoomRuleSetId;
 }) {
   const calculation = score.calculation;
   return (
@@ -27,7 +29,8 @@ export function ScoreDetails({
       {score.responsibility && (
         <p className="score-factors">
           {players[score.responsibility.trigger]?.name ?? '玩家'}触发本次结算， 由
-          {players[score.responsibility.payer]?.name ?? '玩家'}承包三份付款。
+          {players[score.responsibility.payer]?.name ?? '玩家'}承包
+          {ruleSetId === 'nanjing-open-duo' ? '一' : '三'}份付款。
         </p>
       )}
       {score.winningHand && (

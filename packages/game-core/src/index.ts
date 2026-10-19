@@ -101,8 +101,10 @@ export type {
 export {
   DEFAULT_RULE_SET_ID,
   NANJING_OPEN_RULE_SET,
+  NANJING_OPEN_DUO_RULE_SET,
   RULE_SET_REGISTRY,
   getRuleSet,
+  isRuleSetId,
   listRuleSets,
 } from './rules/index.js';
 export type {
@@ -123,6 +125,7 @@ export type {
 } from './rules/index.js';
 
 export { SEATS, createInitialPlayers } from './player.js';
+export { isValidHandResult, isValidPendingHuScoringEvent } from './hu.js';
 export type { BuGangDrawProvenance, DiscardRecord, PlayerState, Seat } from './player.js';
 export type { Meld, MeldType } from './meld.js';
 

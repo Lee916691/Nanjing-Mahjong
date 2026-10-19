@@ -1,6 +1,6 @@
 import { copyPlayers, createInitialPlayers, SEATS } from './player.js';
 import type { PlayerState } from './player.js';
-import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules/index.js';
+import { DEFAULT_RULE_SET_ID, getRuleSet, isRuleSetId } from './rules/index.js';
 import type {
   DeclareAnGangAction,
   DeclareBuGangAction,
@@ -1353,7 +1353,7 @@ function closeDiscardReactionWithoutClaim(
   state: GameState,
   window: DiscardReactionWindow,
 ): GameState {
-  const nextDrawPlayerIndex = nextPlayerIndex(window.fromPlayerIndex);
+  const nextDrawPlayerIndex = nextPlayerIndex(window.fromPlayerIndex, state.players.length);
   const nextState: GameState = {
     ...copyGameState(state),
     currentPlayerIndex: nextDrawPlayerIndex,
@@ -1759,7 +1759,7 @@ function validatePendingBuGangIntent(
     !meld ||
     meld.type !== 'peng' ||
     !tile ||
-    !isValidPengMeld(meld, window.intent.declarerPlayerIndex) ||
+    !isValidPengMeld(meld, window.intent.declarerPlayerIndex, state.players.length) ||
     !isSameOrdinaryTileFace(tile, window.intent.tile) ||
     provenance.length !== 1 ||
     provenance[0]?.tileId !== tile.id ||
@@ -1777,9 +1777,9 @@ export function reactionReducer(state: GameState): GameState {
 
 export function createGameState(options: GameCreationOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? DEFAULT_RULE_SET_ID);
-  const dealerIndex = resolveDealerIndex(options, 0);
+  const dealerIndex = resolveDealerIndex(options, 0, ruleSet.playerCount);
 
-  const players = createInitialPlayers(dealerIndex);
+  const players = createInitialPlayers(dealerIndex, ruleSet.playerCount);
 
   return {
     nextMeldSequence: 1,
@@ -1793,25 +1793,26 @@ export function createGameState(options: GameCreationOptions = {}): GameState {
     pendingAction: createPendingAction(players, dealerIndex, 'draw'),
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
-    specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    specialDiscardTracking: createEmptySpecialDiscardTracking(players.length),
     gangPackage: { status: 'none' },
-    threeMouthState: createInitialThreeMouthState(),
+    threeMouthState: createInitialThreeMouthState(players.length),
     diHuDeclarations: { status: 'closed', declarations: [] },
   };
 }
 
 export function startGameState(state: GameState, options: StartGameOptions = {}): GameState {
   const ruleSet = getRuleSet(options.ruleSetId ?? state.ruleSetId ?? DEFAULT_RULE_SET_ID);
-  const dealerIndex = resolveDealerIndex(options, state.dealerIndex);
+  const dealerIndex = resolveDealerIndex(options, state.dealerIndex, ruleSet.playerCount);
 
   if (state.phase !== 'ready') {
+    if (ruleSet.id !== state.ruleSetId) return state;
     return {
       ...copyGameState(state),
       ruleSetId: ruleSet.id,
     };
   }
 
-  const players = createInitialPlayers(dealerIndex);
+  const players = createInitialPlayers(dealerIndex, ruleSet.playerCount);
 
   return dealInitialHands({
     nextMeldSequence: state.nextMeldSequence,
@@ -1825,9 +1826,9 @@ export function startGameState(state: GameState, options: StartGameOptions = {})
     pendingAction: createPendingAction(players, dealerIndex, 'discard'),
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
-    specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    specialDiscardTracking: createEmptySpecialDiscardTracking(players.length),
     gangPackage: { status: 'none' },
-    threeMouthState: createInitialThreeMouthState(),
+    threeMouthState: createInitialThreeMouthState(players.length),
     diHuDeclarations: { status: 'closed', declarations: [] },
   });
 }
@@ -1839,7 +1840,7 @@ function dealInitialHands(state: GameState): GameState {
   const targetCounts = players.map((_, index) => (index === state.dealerIndex ? 14 : 13));
 
   while (targetCounts.some((targetCount, index) => rawHands[index]?.length !== targetCount)) {
-    for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
+    for (const playerIndex of playerOrderFromDealer(state.dealerIndex, state.players.length)) {
       const targetCount = targetCounts[playerIndex];
 
       if (targetCount === undefined) {
@@ -1864,7 +1865,7 @@ function dealInitialHands(state: GameState): GameState {
   let pendingScoringEvents: PendingScoringEvent[] = [];
   let handProgressFacts = createEmptyHandProgressFacts();
 
-  for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
+  for (const playerIndex of playerOrderFromDealer(state.dealerIndex, state.players.length)) {
     const player = players[playerIndex];
 
     if (!player) {
@@ -1888,7 +1889,7 @@ function dealInitialHands(state: GameState): GameState {
   let phase: GameState['phase'] = 'playing';
   let dealerInitialTile: OrdinaryHandTile | null = null;
 
-  for (const playerIndex of playerOrderFromDealer(state.dealerIndex)) {
+  for (const playerIndex of playerOrderFromDealer(state.dealerIndex, state.players.length)) {
     const player = players[playerIndex];
     const rawHand = rawHands[playerIndex];
 
@@ -1934,7 +1935,7 @@ function dealInitialHands(state: GameState): GameState {
 
   const eligiblePlayerIndices =
     phase === 'playing'
-      ? playerOrderFromDealer(state.dealerIndex)
+      ? playerOrderFromDealer(state.dealerIndex, state.players.length)
           .filter((playerIndex) => playerIndex !== state.dealerIndex)
           .filter((playerIndex) => {
             const player = players[playerIndex];
@@ -2004,15 +2005,15 @@ function finishInitialDealFromRawHands(
     pendingAction: createPendingAction(nextPlayers, state.dealerIndex, 'discard'),
     pendingScoringEvents: [],
     handProgressFacts: createEmptyHandProgressFacts(),
-    specialDiscardTracking: createEmptySpecialDiscardTracking(),
+    specialDiscardTracking: createEmptySpecialDiscardTracking(players.length),
     gangPackage: { status: 'none' },
   };
 
   return phase === 'ended' ? markHandEnded(nextState) : nextState;
 }
 
-function playerOrderFromDealer(dealerIndex: number): number[] {
-  return SEATS.map((_, offset) => (dealerIndex + offset) % SEATS.length);
+function playerOrderFromDealer(dealerIndex: number, playerCount = 4): number[] {
+  return Array.from({ length: playerCount }, (_, offset) => (dealerIndex + offset) % playerCount);
 }
 
 function appendFlowerKongEvents(
@@ -2024,6 +2025,7 @@ function appendFlowerKongEvents(
   createdDuring: ScoringEventCreationStage,
 ): PendingScoringEvent[] | null {
   const nextEvents = [...events];
+  const playerCount = getRuleSet(ruleSetId).playerCount;
 
   for (const kind of findFlowerKongKinds(flowers)) {
     const alreadyRecorded = nextEvents.some(
@@ -2036,11 +2038,11 @@ function appendFlowerKongEvents(
     if (!alreadyRecorded) {
       const transfers = getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
         playerIndex,
-        playerCount: SEATS.length,
+        playerCount,
         kind,
         createdDuring,
       });
-      if (!isValidOtherPlayersTransferTopology(transfers, playerIndex, SEATS.length)) return null;
+      if (!isValidOtherPlayersTransferTopology(transfers, playerIndex, playerCount)) return null;
       nextEvents.push({
         type: 'flower-kong-created',
         playerIndex,
@@ -2067,6 +2069,7 @@ function appendRuntimeFlowerKongEvents(
   suppressFinalFlower: boolean,
 ): PendingScoringEvent[] | null {
   const nextEvents = [...events];
+  const playerCount = getRuleSet(ruleSetId).playerCount;
   const flowers = [...previousFlowers];
   const eventFlowerCount = newlyRevealedFlowers.length - (suppressFinalFlower ? 1 : 0);
 
@@ -2088,14 +2091,14 @@ function appendRuntimeFlowerKongEvents(
           continue;
         const baseTransfers = getRuleSet(ruleSetId).getFlowerKongScoreTransfers({
           playerIndex,
-          playerCount: SEATS.length,
+          playerCount,
           kind,
           createdDuring: 'runtime-flower-replacement',
         });
-        if (!isValidOtherPlayersTransferTopology(baseTransfers, playerIndex, SEATS.length)) {
+        if (!isValidOtherPlayersTransferTopology(baseTransfers, playerIndex, playerCount)) {
           return null;
         }
-        const transfers = redirectTransfersForGangPackage(baseTransfers, gangPackage, SEATS.length);
+        const transfers = redirectTransfersForGangPackage(baseTransfers, gangPackage, playerCount);
         if (!transfers) return null;
         nextEvents.push({
           type: 'flower-kong-created',
@@ -2148,10 +2151,13 @@ function createEmptyHandProgressFacts(): HandProgressFacts {
   };
 }
 
-function createEmptySpecialDiscardTracking(): SpecialDiscardTrackingState {
+function createEmptySpecialDiscardTracking(playerCount = 4): SpecialDiscardTrackingState {
   return {
     followDiscard: null,
-    windSequences: SEATS.map((_, playerIndex) => ({ playerIndex, winds: [] })),
+    windSequences: Array.from({ length: playerCount }, (_, playerIndex) => ({
+      playerIndex,
+      winds: [],
+    })),
   };
 }
 
@@ -2171,18 +2177,20 @@ function updateSpecialDiscardRules(
   const follow = state.specialDiscardTracking.followDiscard;
   let nextFollow = follow;
   let followEvent: PendingSpecialDiscardScoringEvent | null = null;
-  if (follow === null || follow.expectedPlayerIndex !== playerIndex) {
+  if (players.length === 2) {
+    nextFollow = null;
+  } else if (follow === null || follow.expectedPlayerIndex !== playerIndex) {
     nextFollow = {
       initiatorPlayerIndex: playerIndex,
       tileFace,
-      expectedPlayerIndex: nextPlayerIndex(playerIndex),
+      expectedPlayerIndex: nextPlayerIndex(playerIndex, players.length),
       followerCount: 0,
     };
   } else if (!isSameOrdinaryTileFaceValue(follow.tileFace, tileFace)) {
     nextFollow = {
       initiatorPlayerIndex: playerIndex,
       tileFace,
-      expectedPlayerIndex: nextPlayerIndex(playerIndex),
+      expectedPlayerIndex: nextPlayerIndex(playerIndex, players.length),
       followerCount: 0,
     };
   } else if (follow.followerCount === 2) {
@@ -2211,7 +2219,7 @@ function updateSpecialDiscardRules(
   } else {
     nextFollow = {
       ...follow,
-      expectedPlayerIndex: nextPlayerIndex(playerIndex),
+      expectedPlayerIndex: nextPlayerIndex(playerIndex, players.length),
       followerCount: follow.followerCount + 1,
     };
   }
@@ -2257,7 +2265,7 @@ function updateSpecialDiscardRules(
   if (!sequence) return null;
   let winds = discardedTile.category === 'wind' ? [...sequence.winds] : [];
   let windEvent: PendingSpecialDiscardScoringEvent | null = null;
-  if (discardedTile.category === 'wind') {
+  if (discardedTile.category === 'wind' && players.length === 4) {
     if (!winds.includes(discardedTile.wind)) winds.push(discardedTile.wind);
     if (winds.length === WIND_TILE_KINDS.length) {
       const transfers = redirectTransfersForGangPackage(
@@ -2307,22 +2315,28 @@ function trackingAfterSeatClaim(state: GameState, claimantPlayerIndex: number) {
     : { ...state.specialDiscardTracking, followDiscard: null };
 }
 
-export function createInitialThreeMouthState(): ThreeMouthState {
+export function createInitialThreeMouthState(playerCount = 4): ThreeMouthState {
   const initial = (): ThreeMouthPlayerState => ({
     status: 'tracking',
     mouthCount: 0,
     lockedPayerPlayerIndex: null,
   });
-  return [initial(), initial(), initial(), initial()];
+  return Array.from({ length: playerCount }, initial);
 }
 
 function validThreeMouthState(state: unknown): ThreeMouthState | null {
-  if (!isRecord(state) || !Array.isArray(state.players) || state.players.length !== 4) return null;
-  if (state.legacyThreeMouth === true) return createInitialThreeMouthState();
+  if (!hasModePlayers(state)) return null;
+  const playerCount = state.players.length;
+  if (state.legacyThreeMouth === true)
+    return playerCount === 4 ? createInitialThreeMouthState() : null;
   const value = state.threeMouthState;
-  if (!Array.isArray(value) || value.length !== 4) return null;
+  if (!Array.isArray(value) || value.length !== playerCount) return null;
   const result: ThreeMouthPlayerState[] = [];
-  for (let beneficiaryPlayerIndex = 0; beneficiaryPlayerIndex < 4; beneficiaryPlayerIndex += 1) {
+  for (
+    let beneficiaryPlayerIndex = 0;
+    beneficiaryPlayerIndex < playerCount;
+    beneficiaryPlayerIndex += 1
+  ) {
     if (!Object.prototype.hasOwnProperty.call(value, beneficiaryPlayerIndex)) return null;
     const playerState = value[beneficiaryPlayerIndex];
     if (!isRecord(playerState)) return null;
@@ -2333,7 +2347,7 @@ function validThreeMouthState(state: unknown): ThreeMouthState | null {
           playerState.mouthCount !== 1 &&
           playerState.mouthCount !== 2) ||
         (playerState.lockedPayerPlayerIndex !== null &&
-          (!isPlayerIndexValue(playerState.lockedPayerPlayerIndex, 4) ||
+          (!isPlayerIndexValue(playerState.lockedPayerPlayerIndex, playerCount) ||
             playerState.lockedPayerPlayerIndex === beneficiaryPlayerIndex)) ||
         (playerState.mouthCount === 0 && playerState.lockedPayerPlayerIndex !== null)
       ) {
@@ -2345,7 +2359,7 @@ function validThreeMouthState(state: unknown): ThreeMouthState | null {
     if (playerState.status === 'active') {
       if (
         !hasOnlyKeys(playerState, ['status', 'payerPlayerIndex']) ||
-        !isPlayerIndexValue(playerState.payerPlayerIndex, 4) ||
+        !isPlayerIndexValue(playerState.payerPlayerIndex, playerCount) ||
         playerState.payerPlayerIndex === beneficiaryPlayerIndex
       ) {
         return null;
@@ -2356,7 +2370,7 @@ function validThreeMouthState(state: unknown): ThreeMouthState | null {
     if (playerState.status !== 'invalid' || !hasOnlyKeys(playerState, ['status'])) return null;
     result.push(playerState as ThreeMouthPlayerState);
   }
-  return [result[0]!, result[1]!, result[2]!, result[3]!];
+  return result;
 }
 
 function withoutActiveThreeMouthClaims(
@@ -2412,8 +2426,8 @@ function advanceThreeMouthForExternalMouth(
   sourcePlayerIndex: number,
 ): ThreeMouthState {
   if (
-    !isPlayerIndexValue(beneficiaryPlayerIndex, 4) ||
-    !isPlayerIndexValue(sourcePlayerIndex, 4) ||
+    !isPlayerIndexValue(beneficiaryPlayerIndex, state.length) ||
+    !isPlayerIndexValue(sourcePlayerIndex, state.length) ||
     beneficiaryPlayerIndex === sourcePlayerIndex
   ) {
     return state;
@@ -2438,7 +2452,7 @@ function advanceThreeMouthForExternalMouth(
 }
 
 function advanceThreeMouthForAnGang(state: ThreeMouthState, playerIndex: number): ThreeMouthState {
-  if (!isPlayerIndexValue(playerIndex, 4)) return state;
+  if (!isPlayerIndexValue(playerIndex, state.length)) return state;
   const current = state[playerIndex];
   if (!current || current.status !== 'tracking') return state;
   if (current.mouthCount === 2) {
@@ -2462,12 +2476,7 @@ function replaceThreeMouthPlayerState(
   playerIndex: number,
   playerState: ThreeMouthPlayerState,
 ): ThreeMouthState {
-  return [
-    playerIndex === 0 ? playerState : state[0],
-    playerIndex === 1 ? playerState : state[1],
-    playerIndex === 2 ? playerState : state[2],
-    playerIndex === 3 ? playerState : state[3],
-  ];
+  return state.map((entry, index) => (index === playerIndex ? playerState : entry));
 }
 
 function isValidGeneratedTransfers(
@@ -2493,8 +2502,7 @@ function isValidGeneratedTransfers(
 }
 
 function validGangPackageState(state: unknown): GangPackageState | null {
-  if (!isRecord(state) || !Array.isArray(state.players) || state.players.length !== SEATS.length)
-    return null;
+  if (!hasModePlayers(state)) return null;
   const value = state.gangPackage;
   if (!isRecord(value)) return null;
   if (value.status === 'none') {
@@ -2706,7 +2714,11 @@ function addFlowerKongFacts(
     : { ...facts, flowerKongCount: facts.flowerKongCount + addedCount };
 }
 
-function resolveDealerIndex(options: StartGameOptions, fallbackDealerIndex: number): number {
+function resolveDealerIndex(
+  options: StartGameOptions,
+  fallbackDealerIndex: number,
+  playerCount = 4,
+): number {
   const seatDealerIndex =
     options.dealerSeat === undefined ? undefined : SEATS.indexOf(options.dealerSeat);
   const dealerIndex = options.dealerIndex ?? seatDealerIndex ?? fallbackDealerIndex;
@@ -2717,7 +2729,7 @@ function resolveDealerIndex(options: StartGameOptions, fallbackDealerIndex: numb
     }
   }
 
-  if (!Number.isInteger(dealerIndex) || dealerIndex < 0 || dealerIndex >= SEATS.length) {
+  if (!Number.isInteger(dealerIndex) || dealerIndex < 0 || dealerIndex >= playerCount) {
     throw new Error(`Invalid dealer index ${dealerIndex}`);
   }
 
@@ -2876,12 +2888,7 @@ function copyGameState(state: GameState): GameState {
       })),
     },
     gangPackage: { ...state.gangPackage },
-    threeMouthState: [
-      { ...state.threeMouthState[0] },
-      { ...state.threeMouthState[1] },
-      { ...state.threeMouthState[2] },
-      { ...state.threeMouthState[3] },
-    ],
+    threeMouthState: state.threeMouthState.map((entry) => ({ ...entry })),
     ...(state.diHuDeclarations === undefined
       ? {}
       : { diHuDeclarations: copyDiHuDeclarationState(state.diHuDeclarations) }),
@@ -2928,7 +2935,9 @@ function validDiHuDeclarationState(state: unknown): DiHuDeclarationState | null 
   const validDeclarations: DiHuDeclaration[] = declarations;
   const declaredIndices = validDeclarations.map((declaration) => declaration.playerIndex);
   if (new Set(declaredIndices).size !== declaredIndices.length) return null;
-  const seatOrder = playerOrderFromDealer(dealerIndex).filter((index) => index !== dealerIndex);
+  const seatOrder = playerOrderFromDealer(dealerIndex, playerCount).filter(
+    (index) => index !== dealerIndex,
+  );
   const declaredPositions = declaredIndices.map((index) => seatOrder.indexOf(index));
   if (
     declaredPositions.some((position) => position < 0) ||
@@ -3086,8 +3095,8 @@ function createResponderOrder(
   players: readonly PlayerState[],
   fromPlayerIndex: number,
 ): ReactionWindow['responderOrder'] {
-  return SEATS.slice(1).map((_, offset) => {
-    const playerIndex = (fromPlayerIndex + offset + 1) % SEATS.length;
+  return players.slice(1).map((_, offset) => {
+    const playerIndex = (fromPlayerIndex + offset + 1) % players.length;
     const player = players[playerIndex];
 
     if (!player) {
@@ -3375,9 +3384,7 @@ function sameHuEvaluation(left: HuEvaluation, right: HuEvaluation): boolean {
 
 function isSafeSelfDrawCandidateState(value: unknown, playerIndex: number): value is GameState {
   if (
-    !isRecord(value) ||
-    !Array.isArray(value.players) ||
-    value.players.length !== SEATS.length ||
+    !hasModePlayers(value) ||
     typeof playerIndex !== 'number' ||
     !Number.isFinite(playerIndex) ||
     !Number.isInteger(playerIndex) ||
@@ -3389,7 +3396,6 @@ function isSafeSelfDrawCandidateState(value: unknown, playerIndex: number): valu
     value.currentPlayerIndex < 0 ||
     value.currentPlayerIndex >= value.players.length ||
     value.currentPlayerIndex !== playerIndex ||
-    value.ruleSetId !== 'nanjing-open' ||
     value.phase !== 'playing' ||
     value.turnStage !== 'waiting-for-discard' ||
     !isRecord(value.pendingAction) ||
@@ -3524,8 +3530,19 @@ function isValidFlowerEntity(value: unknown): value is FlowerTile {
   );
 }
 
-function nextPlayerIndex(currentPlayerIndex: number): number {
-  return (currentPlayerIndex + 1) % SEATS.length;
+function nextPlayerIndex(currentPlayerIndex: number, playerCount = 4): number {
+  return (currentPlayerIndex + 1) % playerCount;
+}
+
+function hasModePlayers(
+  value: unknown,
+): value is Record<string, unknown> & { players: unknown[]; ruleSetId: GameState['ruleSetId'] } {
+  return (
+    isRecord(value) &&
+    isRuleSetId(value.ruleSetId) &&
+    Array.isArray(value.players) &&
+    value.players.length === getRuleSet(value.ruleSetId).playerCount
+  );
 }
 
 function isAnGangTurn(state: GameState, playerIndex: number): boolean {
@@ -3538,7 +3555,7 @@ function isAnGangTurn(state: GameState, playerIndex: number): boolean {
   const followsBuGang = reactionWindow?.source === 'bu-gang' && reactionWindow.status === 'closed';
 
   return (
-    state.players.length === SEATS.length &&
+    hasModePlayers(state) &&
     Number.isInteger(playerIndex) &&
     playerIndex >= 0 &&
     playerIndex < state.players.length &&
@@ -3581,7 +3598,9 @@ function findBuGangCandidates(state: GameState, playerIndex: number): BuGangCand
     return [];
   }
 
-  const validPengs = player.melds.filter((meld) => isValidPengMeld(meld, playerIndex));
+  const validPengs = player.melds.filter((meld) =>
+    isValidPengMeld(meld, playerIndex, state.players.length),
+  );
   const duplicateFaces = new Set<string>();
   const faceCounts = new Map<string, number>();
   for (const meld of player.melds.filter(
@@ -3665,7 +3684,7 @@ function isBuGangTurn(state: GameState, playerIndex: number): boolean {
     reactionWindow.responses.some((response) => response.type === 'ming-gang');
   const followsBuGang = reactionWindow?.source === 'bu-gang' && reactionWindow.status === 'closed';
   return (
-    state.players.length === SEATS.length &&
+    hasModePlayers(state) &&
     Number.isInteger(playerIndex) &&
     playerIndex >= 0 &&
     playerIndex < state.players.length &&
@@ -3680,7 +3699,11 @@ function isBuGangTurn(state: GameState, playerIndex: number): boolean {
   );
 }
 
-function isValidPengMeld(meld: PlayerState['melds'][number], ownerPlayerIndex: number): boolean {
+function isValidPengMeld(
+  meld: PlayerState['melds'][number],
+  ownerPlayerIndex: number,
+  playerCount = 4,
+): boolean {
   return (
     meld.type === 'peng' &&
     typeof meld.id === 'string' &&
@@ -3694,7 +3717,7 @@ function isValidPengMeld(meld: PlayerState['melds'][number], ownerPlayerIndex: n
     meld.tiles.some((tile) => tile.id === meld.claimedTileId) &&
     Number.isInteger(meld.fromPlayerIndex) &&
     (meld.fromPlayerIndex ?? -1) >= 0 &&
-    (meld.fromPlayerIndex ?? SEATS.length) < SEATS.length &&
+    (meld.fromPlayerIndex ?? playerCount) < playerCount &&
     meld.fromPlayerIndex !== ownerPlayerIndex
   );
 }

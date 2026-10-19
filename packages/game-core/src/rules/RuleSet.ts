@@ -19,7 +19,7 @@ import type {
 import type { ThreeMouthSpecialHuTrigger } from '../hu.js';
 import type { WindTileKind } from '../state.js';
 
-export type RuleSetId = 'nanjing-open';
+export type RuleSetId = 'nanjing-open' | 'nanjing-open-duo';
 
 export interface MingGangScoringContext {
   readonly receiverPlayerIndex: number;
@@ -169,6 +169,7 @@ export interface ThreeMouthForcedHuResolution {
 
 export interface RuleSet {
   readonly id: RuleSetId;
+  readonly playerCount: 2 | 4;
   readonly displayName: string;
   readonly totalEffectiveDealerTurns: number;
   readonly validateAction: (state: GameState, action: GameAction) => boolean;

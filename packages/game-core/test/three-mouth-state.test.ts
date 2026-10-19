@@ -45,10 +45,10 @@ function withPlayerState(playerIndex: number, playerState: ThreeMouthPlayerState
     initialPlayerState(),
   ];
   return [
-    playerIndex === 0 ? playerState : states[0],
-    playerIndex === 1 ? playerState : states[1],
-    playerIndex === 2 ? playerState : states[2],
-    playerIndex === 3 ? playerState : states[3],
+    playerIndex === 0 ? playerState : states[0]!,
+    playerIndex === 1 ? playerState : states[1]!,
+    playerIndex === 2 ? playerState : states[2]!,
+    playerIndex === 3 ? playerState : states[3]!,
   ];
 }
 
@@ -216,9 +216,9 @@ describe('D. initialization behavior', () => {
 describe('B. short public action chains from legal fixtures', () => {
   it('advances Peng only after the reaction window formally resolves', () => {
     const trace = runDiscardClaim('peng');
-    expect(trace.opened.threeMouthState[1]).toEqual(initialPlayerState());
-    expect(trace.submitted.threeMouthState[1]).toEqual(initialPlayerState());
-    expect(trace.resolved.threeMouthState[1]).toEqual({
+    expect(trace.opened.threeMouthState[1]!).toEqual(initialPlayerState());
+    expect(trace.submitted.threeMouthState[1]!).toEqual(initialPlayerState());
+    expect(trace.resolved.threeMouthState[1]!).toEqual({
       status: 'tracking',
       mouthCount: 1,
       lockedPayerPlayerIndex: 0,
@@ -228,8 +228,8 @@ describe('B. short public action chains from legal fixtures', () => {
 
   it('advances MingGang only after formal resolution and keeps its live event', () => {
     const trace = runDiscardClaim('ming-gang');
-    expect(trace.submitted.threeMouthState[1]).toEqual(initialPlayerState());
-    expect(trace.resolved.threeMouthState[1]).toEqual({
+    expect(trace.submitted.threeMouthState[1]!).toEqual(initialPlayerState());
+    expect(trace.resolved.threeMouthState[1]!).toEqual({
       status: 'tracking',
       mouthCount: 1,
       lockedPayerPlayerIndex: 0,
@@ -245,7 +245,7 @@ describe('B. short public action chains from legal fixtures', () => {
       tileFace: { category: 'number', suit: 'wan', rank: 1 },
     });
     expect(result.players[0]?.melds.at(-1)?.type).toBe('an-gang');
-    expect(result.threeMouthState[0]).toEqual({
+    expect(result.threeMouthState[0]!).toEqual({
       status: 'tracking',
       mouthCount: 1,
       lockedPayerPlayerIndex: null,
@@ -272,7 +272,7 @@ describe('B. short public action chains from legal fixtures', () => {
       });
     }
     expect(state.players[0]?.melds.filter((meld) => meld.type === 'an-gang')).toHaveLength(3);
-    expect(state.threeMouthState[0]).toEqual({ status: 'invalid' });
+    expect(state.threeMouthState[0]!).toEqual({ status: 'invalid' });
     expect(state.handProgressFacts.successfulAnGangCount).toBe(3);
   });
 
@@ -292,7 +292,7 @@ describe('B. short public action chains from legal fixtures', () => {
     }
     state = applyAction(state, { type: 'RESOLVE_REACTION_WINDOW' });
     expect(state.phase).toBe('ended');
-    expect(state.threeMouthState[1]).toEqual(initialPlayerState());
+    expect(state.threeMouthState[1]!).toEqual(initialPlayerState());
     expect(state.players[1]?.melds).toEqual([]);
   });
 });
@@ -304,7 +304,7 @@ describe('B. legal fixtures completed through public actions', () => {
       mouthCount: 2,
       lockedPayerPlayerIndex: 0,
     }).resolved;
-    expect(result.threeMouthState[1]).toEqual({ status: 'active', payerPlayerIndex: 0 });
+    expect(result.threeMouthState[1]!).toEqual({ status: 'active', payerPlayerIndex: 0 });
     expect(result.gangPackage).toMatchObject({
       status: 'active',
       payerPlayerIndex: 0,
@@ -319,14 +319,14 @@ describe('B. legal fixtures completed through public actions', () => {
         status: 'tracking',
         mouthCount: 1,
         lockedPayerPlayerIndex: 0,
-      }).resolved.threeMouthState[1],
+      }).resolved.threeMouthState[1]!,
     ).toEqual({ status: 'tracking', mouthCount: 2, lockedPayerPlayerIndex: 0 });
     expect(
       runDiscardClaim('peng', {
         status: 'tracking',
         mouthCount: 2,
         lockedPayerPlayerIndex: 0,
-      }).resolved.threeMouthState[1],
+      }).resolved.threeMouthState[1]!,
     ).toEqual({ status: 'active', payerPlayerIndex: 0 });
   });
 
@@ -336,7 +336,7 @@ describe('B. legal fixtures completed through public actions', () => {
         status: 'tracking',
         mouthCount: 2,
         lockedPayerPlayerIndex: 0,
-      }).resolved.threeMouthState[1],
+      }).resolved.threeMouthState[1]!,
     ).toEqual({ status: 'active', payerPlayerIndex: 0 });
   });
 
@@ -349,7 +349,7 @@ describe('B. legal fixtures completed through public actions', () => {
         tileFace: { category: 'number', suit: 'wan', rank: 1 },
       },
     );
-    expect(once.threeMouthState[0]).toEqual({
+    expect(once.threeMouthState[0]!).toEqual({
       status: 'tracking',
       mouthCount: 2,
       lockedPayerPlayerIndex: 2,
@@ -362,7 +362,7 @@ describe('B. legal fixtures completed through public actions', () => {
         tileFace: { category: 'number', suit: 'wan', rank: 1 },
       },
     );
-    expect(twice.threeMouthState[0]).toEqual({ status: 'active', payerPlayerIndex: 2 });
+    expect(twice.threeMouthState[0]!).toEqual({ status: 'active', payerPlayerIndex: 2 });
   });
 
   it('allows two anonymous AnGangs followed by one external mouth', () => {
@@ -371,7 +371,7 @@ describe('B. legal fixtures completed through public actions', () => {
         status: 'tracking',
         mouthCount: 2,
         lockedPayerPlayerIndex: null,
-      }).resolved.threeMouthState[1],
+      }).resolved.threeMouthState[1]!,
     ).toEqual({ status: 'active', payerPlayerIndex: 0 });
   });
 
@@ -383,7 +383,7 @@ describe('B. legal fixtures completed through public actions', () => {
       1,
     ).resolved;
     expect(invalid.players[1]?.melds.at(-1)?.type).toBe('peng');
-    expect(invalid.threeMouthState[1]).toEqual({ status: 'invalid' });
+    expect(invalid.threeMouthState[1]!).toEqual({ status: 'invalid' });
   });
 
   it('does not count BuGang again and still lets an active player finish it', () => {
@@ -399,7 +399,7 @@ describe('B. legal fixtures completed through public actions', () => {
     }
     result = applyAction(result, { type: 'RESOLVE_REACTION_WINDOW' });
     expect(result.players[0]?.melds[0]?.type).toBe('bu-gang');
-    expect(result.threeMouthState[0]).toEqual({ status: 'active', payerPlayerIndex: 2 });
+    expect(result.threeMouthState[0]!).toEqual({ status: 'active', payerPlayerIndex: 2 });
   });
 
   it('does not trigger three-mouth on a robbed BuGang and clears state at hand end', () => {
@@ -503,7 +503,7 @@ describe('B. legal fixtures completed through public actions', () => {
   it('does not advance MingGang when scoring transfer validation fails', () => {
     const hook = vi.spyOn(NANJING_OPEN_RULE_SET, 'getMingGangScoreTransfers').mockReturnValue([]);
     const trace = runDiscardClaim('ming-gang');
-    expect(trace.resolved.threeMouthState[1]).toEqual(initialPlayerState());
+    expect(trace.resolved.threeMouthState[1]!).toEqual(initialPlayerState());
     expect(trace.resolved.players[1]?.melds).toEqual([]);
     expect(trace.resolved.pendingScoringEvents).toEqual([]);
     hook.mockRestore();
@@ -518,7 +518,7 @@ describe('B. legal fixtures completed through public actions', () => {
         tileFace: { category: 'number', suit: 'wan', rank: 1 },
       }),
     ).toBe(state);
-    expect(state.threeMouthState[0]).toEqual(initialPlayerState());
+    expect(state.threeMouthState[0]!).toEqual(initialPlayerState());
   });
 });
 
@@ -591,7 +591,7 @@ describe('D. state invariants and non-effects', () => {
     for (const index of [0, 2, 3] as const) {
       expect(trace.resolved.threeMouthState[index]).toBe(trace.submitted.threeMouthState[index]);
     }
-    expect(trace.resolved.threeMouthState[1]).not.toBe(trace.submitted.threeMouthState[1]);
+    expect(trace.resolved.threeMouthState[1]!).not.toBe(trace.submitted.threeMouthState[1]!);
   });
 
   it('does not increment packageSettlementCount merely by becoming active', () => {
@@ -618,14 +618,14 @@ describe('D. state invariants and non-effects', () => {
       tileFace: { category: 'number', suit: 'wan', rank: 1 },
     });
     expect(repeated).toBe(state);
-    expect(repeated.threeMouthState[0]).toEqual(active);
+    expect(repeated.threeMouthState[0]!).toEqual(active);
   });
 
   it('makes repeated reaction resolution an original-reference no-op without double counting', () => {
     const resolved = runDiscardClaim('peng').resolved;
     const repeated = applyAction(resolved, { type: 'RESOLVE_REACTION_WINDOW' });
     expect(repeated).toBe(resolved);
-    expect(repeated.threeMouthState[1]).toEqual({
+    expect(repeated.threeMouthState[1]!).toEqual({
       status: 'tracking',
       mouthCount: 1,
       lockedPayerPlayerIndex: 0,

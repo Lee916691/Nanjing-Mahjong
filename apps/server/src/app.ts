@@ -5,7 +5,9 @@ import { resolve } from 'node:path';
 import { Server } from 'socket.io';
 import type { Socket } from 'socket.io';
 import type { RoomCommand, RoomEvent, CommandAck } from '@nanjing-mahjong/shared-types';
-import { Store } from './store.js';
+import { isRuleSetId } from '@nanjing-mahjong/game-core';
+import { Store, ReceiptConflictError } from './store.js';
+import { createHash } from 'node:crypto';
 import {
   newRoom,
   start,
@@ -48,12 +50,15 @@ class ClientError extends Error {
 function fail(code: string, message: string): never {
   throw new ClientError(code, message);
 }
-function parse(value: unknown): RoomCommand {
+function parse(value: unknown, event: RoomEvent): RoomCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     fail('BAD_REQUEST', '请求格式错误');
   const v = value as Record<string, unknown>;
   if (
-    Object.keys(v).some((k) => !['commandId', 'roomId', 'name', 'ready', 'token'].includes(k)) ||
+    Object.keys(v).some(
+      (k) => !['commandId', 'roomId', 'name', 'ready', 'token', 'ruleSetId'].includes(k),
+    ) ||
+    (Object.hasOwn(v, 'ruleSetId') && (event !== 'room:create' || !isRuleSetId(v.ruleSetId))) ||
     typeof v.commandId !== 'string' ||
     !/^[\w-]{8,80}$/.test(v.commandId) ||
     (v.roomId !== undefined && (typeof v.roomId !== 'string' || !/^[\w-]{12}$/.test(v.roomId))) ||
@@ -144,14 +149,17 @@ export function createApp(options: {
         let commandId = '';
         try {
           if (sockets.get(session) !== socket) fail('REPLACED', '此页面已由另一页面接管');
-          const cmd = parse(raw);
+          const cmd = parse(raw, event);
           commandId = cmd.commandId;
           if (Date.now() - windowStart > 1000) {
             windowStart = Date.now();
             count = 0;
           }
           if (++count > 30) fail('RATE_LIMIT', '操作太频繁，请稍后再试');
-          const receipt = store.receipt(session, cmd.commandId);
+          const fingerprint = createHash('sha256')
+            .update(JSON.stringify([event, cmd]))
+            .digest('hex');
+          const receipt = store.receipt(session, cmd.commandId, fingerprint);
           if (receipt) {
             ackFn(receipt);
             return;
@@ -163,7 +171,7 @@ export function createApp(options: {
             if ([...rooms.values()].some((r) => r.members.some((m) => m?.session === session)))
               fail('ALREADY_SEATED', '请先离开当前房间');
             if (!cmd.name) fail('NAME_REQUIRED', '请填写昵称');
-            room = newRoom(session, cmd.name.trim());
+            room = newRoom(session, cmd.name.trim(), cmd.ruleSetId);
           } else {
             const existing = rooms.get(cmd.roomId ?? '');
             if (!existing) fail('ROOM_NOT_FOUND', '房间不存在');
@@ -215,7 +223,7 @@ export function createApp(options: {
                   room.status !== 'waiting' ||
                   room.members.some((m) => !m?.ready || !sockets.has(m.session))
                 )
-                  fail('NOT_READY', '需要四人在线并准备');
+                  fail('NOT_READY', `需要${room.members.length === 2 ? '两' : '四'}人在线并准备`);
                 start(room);
               } else if (event === 'room:next-ready') {
                 confirmNextHand(room, seat, cmd.token, online(), secret);
@@ -223,6 +231,7 @@ export function createApp(options: {
                 if (room.status !== 'playing') fail('FORBIDDEN', '只能结束进行中的牌局');
                 room.status = 'ended';
                 room.remainingMs = null;
+                room.nextHandReady = [];
                 room.epoch++;
               } else if (event === 'room:rematch') {
                 if (seat !== room.host || !['ended', 'completed'].includes(room.status))
@@ -232,6 +241,7 @@ export function createApp(options: {
                 room.reactions = {};
                 room.scores = [];
                 room.tableEvents = [];
+                room.nextHandReady = [];
                 room.epoch++;
                 room.members.forEach((m) => {
                   if (m) m.ready = false;
@@ -265,18 +275,23 @@ export function createApp(options: {
             if (!privateOnly) room.revision++;
           }
           const ack: CommandAck = { commandId, ok: true, roomId: room.id, revision: room.revision };
-          store.commit(room, session, ack);
+          store.commit(room, session, ack, fingerprint);
           rooms.set(room.id, room);
           ackFn(ack);
           send(room, privateOnly ? privateRecipients : undefined);
           if (event === 'room:leave') socket.emit('room:left');
         } catch (error) {
-          const known = error instanceof ClientError;
+          const known = error instanceof ClientError || error instanceof ReceiptConflictError;
           ackFn({
             commandId,
             ok: false,
             error: {
-              code: known ? error.code : 'OPERATION_FAILED',
+              code:
+                error instanceof ReceiptConflictError
+                  ? 'DUPLICATE_ID'
+                  : error instanceof ClientError
+                    ? error.code
+                    : 'OPERATION_FAILED',
               message: known ? error.message : '操作未保存，请重试或检查服务端',
             },
           });

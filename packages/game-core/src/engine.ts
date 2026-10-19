@@ -51,7 +51,7 @@ function dispatch(state: GameState, action: GameAction): GameState {
   if (next === state) return state;
   if (state.legacyThreeMouth) return { ...next, legacyThreeMouth: true };
   return next.phase === 'ended'
-    ? { ...next, threeMouthState: createInitialThreeMouthState() }
+    ? { ...next, threeMouthState: createInitialThreeMouthState(next.players.length) }
     : next;
 }
 

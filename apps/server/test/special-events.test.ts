@@ -21,10 +21,10 @@ function mouthRoom(mouth: ThreeMouthPlayerState) {
   const room = eventRoom();
   const game = room.match!.currentHand;
   game.threeMouthState = [
-    game.threeMouthState[0],
+    game.threeMouthState[0]!,
     mouth,
-    game.threeMouthState[2],
-    game.threeMouthState[3],
+    game.threeMouthState[2]!,
+    game.threeMouthState[3]!,
   ];
   setEventHand(room, 0, [ordinary('wan-1-1')]);
   setEventHand(
@@ -259,9 +259,9 @@ describe('special rule confirmation events', () => {
     const game = gang.match!.currentHand;
     game.threeMouthState = [
       { status: 'tracking', mouthCount: 1, lockedPayerPlayerIndex: 2 },
-      game.threeMouthState[1],
-      game.threeMouthState[2],
-      game.threeMouthState[3],
+      game.threeMouthState[1]!,
+      game.threeMouthState[2]!,
+      game.threeMouthState[3]!,
     ];
     setEventHand(
       gang,
@@ -326,9 +326,9 @@ describe('authoritative mouth lock events', () => {
       const game = room.match!.currentHand;
       game.threeMouthState = [
         { status: 'tracking', mouthCount: 1, lockedPayerPlayerIndex: payer },
-        game.threeMouthState[1],
-        game.threeMouthState[2],
-        game.threeMouthState[3],
+        game.threeMouthState[1]!,
+        game.threeMouthState[2]!,
+        game.threeMouthState[3]!,
       ];
       setEventHand(
         room,

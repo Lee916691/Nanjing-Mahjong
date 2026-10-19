@@ -29,7 +29,7 @@ export function tableStatus(
     return {
       title: `${room.result} · ${room.nextHandToken ? '等待下一手确认' : '本手已结束'}`,
       hint: room.nextHandToken
-        ? `${ready.includes(room.self) ? '你已确认' : '请确认开始下一手'} · ${ready.length}/4 已确认${waiting ? `，等待${waiting}` : ''}${room.nextHandSeconds !== null ? ` · ${room.nextHandSeconds} 秒后自动开始` : ''}`
+        ? `${ready.includes(room.self) ? '你已确认' : '请确认开始下一手'} · ${ready.length}/${room.players.length} 已确认${waiting ? `，等待${waiting}` : ''}${room.nextHandSeconds !== null ? ` · ${room.nextHandSeconds} 秒后自动开始` : ''}`
         : '本手已结算',
     };
   }

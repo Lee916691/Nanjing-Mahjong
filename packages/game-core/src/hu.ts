@@ -378,6 +378,7 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
         value.evaluation.patterns.includes('all-pungs')) &&
       isNonNegativeInteger(value.evaluation.hardFlowerCount) &&
       isNonNegativeInteger(value.evaluation.softFlowerCount) &&
+      hasValidModeFlowers(value.evaluation, playerCount, true) &&
       value.evaluation.structure === undefined
     );
   }
@@ -422,6 +423,8 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
       isRecord(value.winner) &&
       isPlayerIndex(value.winner.playerIndex, playerCount) &&
       isValidHuEvaluation(value.winner.evaluation) &&
+      hasValidPackageKind(value.winner.packageKind) &&
+      hasValidModeFlowers(value.winner.evaluation, playerCount, true) &&
       hasValidThreeMouthMetadata(
         value.winner,
         value.winner.evaluation,
@@ -469,6 +472,13 @@ export function isValidHandResult(value: unknown, playerCount: number): value is
       (!hasForcedWinner && winner.payerPlayerIndex !== undefined) ||
       (hasForcedWinner && winner.payerPlayerIndex === undefined) ||
       !isValidHuEvaluation(winner.evaluation) ||
+      !hasValidPackageKind(winner.packageKind) ||
+      (value.source === 'rob-bu-gang' && winner.packageKind !== undefined) ||
+      !hasValidModeFlowers(
+        winner.evaluation,
+        playerCount,
+        winner.packageKind !== undefined || winner.threeMouthResolution !== undefined,
+      ) ||
       (isRecord(winner.threeMouthResolution) &&
         winner.threeMouthResolution.triggerPlayerIndex !== orderingOriginPlayerIndex) ||
       !hasValidThreeMouthMetadata(
@@ -503,7 +513,16 @@ export function isValidPendingHuScoringEvent(
     value.status !== 'pending' ||
     !isPlayerIndex(value.winnerPlayerIndex, playerCount) ||
     !isValidOrdinaryHandTile(value.winningTile) ||
-    !isValidHuEvaluation(value.evaluation)
+    !isValidHuEvaluation(value.evaluation) ||
+    !hasValidPackageKind(value.packageKind) ||
+    (value.source === 'rob-bu-gang' && value.packageKind !== undefined) ||
+    !hasValidModeFlowers(
+      value.evaluation,
+      playerCount,
+      value.source === 'self-draw' ||
+        value.packageKind !== undefined ||
+        value.threeMouthResolution !== undefined,
+    )
   )
     return false;
   if (value.source === 'self-draw') {
@@ -542,6 +561,56 @@ export function isValidPendingHuScoringEvent(
       value.payerPlayerIndex,
     )
   );
+}
+
+function hasValidPackageKind(value: unknown): boolean {
+  return (
+    value === undefined || value === 'three-mouth' || value === 'three-pure' || value === 'global'
+  );
+}
+
+function hasValidModeFlowers(
+  value: unknown,
+  playerCount: number,
+  selfDrawSettlement: boolean,
+): boolean {
+  if (!isRecord(value)) return false;
+  const items = value.softFlowerItems;
+  if (playerCount !== 2)
+    return (
+      !Array.isArray(items) || !items.some((item) => isRecord(item) && item.kind === 'self-draw')
+    );
+  const expected =
+    selfDrawSettlement && Array.isArray(value.patterns) && !value.patterns.includes('tian-hu');
+  if (items === undefined) return !expected && value.softFlowerCount === 0;
+  if (!Array.isArray(items)) return false;
+  const kinds = [
+    'missing-suit',
+    'exposed-kong',
+    'concealed-kong',
+    'wind-triplet',
+    'closed-wait',
+    'edge-wait',
+    'single-wait',
+    'self-draw',
+  ];
+  if (
+    !items.every(
+      (item) =>
+        isRecord(item) &&
+        kinds.includes(String(item.kind)) &&
+        isNonNegativeInteger(item.count) &&
+        item.count > 0,
+    )
+  )
+    return false;
+  if (
+    new Set(items.map((item) => item.kind)).size !== items.length ||
+    items.reduce((sum, item) => sum + item.count, 0) !== value.softFlowerCount
+  )
+    return false;
+  const bonus = items.filter((item) => item.kind === 'self-draw');
+  return expected ? bonus.length === 1 && bonus[0].count === 2 : bonus.length === 0;
 }
 
 function hasValidThreeMouthMetadata(

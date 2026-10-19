@@ -11,6 +11,10 @@ import {
   getAvailableSelfDrawHu,
   getAvailableDiHuDecision,
   explainNanjingScore,
+  getRuleSet,
+  isRuleSetId,
+  isValidHandResult,
+  isValidPendingHuScoringEvent,
 } from '@nanjing-mahjong/game-core';
 import type {
   GameAction,
@@ -18,6 +22,8 @@ import type {
   MatchState,
   Tile,
   OrdinaryTileFace,
+  RuleSetId,
+  ScoreTransfer,
 } from '@nanjing-mahjong/game-core';
 import type {
   RoomView,
@@ -38,8 +44,9 @@ export interface Member {
 }
 export const HAND_REVIEW_MS = 45_000;
 export interface SavedRoom {
-  format: 1;
-  rules: 'V1.0.8' | 'V1.0.9' | 'V1.0.10' | 'V1.0.11';
+  format: 1 | 2;
+  ruleSetId?: RuleSetId;
+  rules: 'V1.0.8' | 'V1.0.9' | 'V1.0.10' | 'V1.0.11' | 'V1.0.12';
   id: string;
   host: number;
   members: (Member | null)[];
@@ -56,12 +63,20 @@ export interface SavedRoom {
   remainingMs: number | null;
   nextHandReady?: number[];
 }
-export const newRoom = (session: string, name: string): SavedRoom => ({
-  format: 1,
-  rules: 'V1.0.11',
+export const newRoom = (
+  session: string,
+  name: string,
+  ruleSetId: RuleSetId = 'nanjing-open',
+): SavedRoom => ({
+  format: 2,
+  ruleSetId,
+  rules: ruleSetId === 'nanjing-open-duo' ? 'V1.0.12' : 'V1.0.11',
   id: randomBytes(9).toString('base64url'),
   host: 0,
-  members: [{ session, name, ready: false, joined: Date.now() }, null, null, null],
+  members: [
+    { session, name, ready: false, joined: Date.now() },
+    ...Array.from({ length: getRuleSet(ruleSetId).playerCount - 1 }, () => null),
+  ],
   status: 'waiting',
   revision: 1,
   epoch: 0,
@@ -80,6 +95,201 @@ export class TableEventArchiveError extends Error {
   ) {
     super(`牌桌事件存档兼容性错误：${detail}`);
   }
+}
+
+export class RoomModeArchiveError extends Error {
+  constructor() {
+    super('房间玩法存档不兼容或已损坏');
+  }
+}
+
+function roomRuleSet(room: SavedRoom): RuleSetId {
+  const id = room.ruleSetId ?? (room.format === 1 ? 'nanjing-open' : undefined);
+  if (!isRuleSetId(id)) throw new RoomModeArchiveError();
+  return id;
+}
+
+function validateRoomMode(room: SavedRoom, id: RuleSetId): void {
+  const count = getRuleSet(id).playerCount;
+  const validIndex = (value: unknown): value is number =>
+    Number.isInteger(value) && Number(value) >= 0 && Number(value) < count;
+  if (
+    (room.format !== 1 && room.format !== 2) ||
+    (room.format === 1 && id !== 'nanjing-open') ||
+    (id === 'nanjing-open-duo'
+      ? room.rules !== 'V1.0.12'
+      : !['V1.0.8', 'V1.0.9', 'V1.0.10', 'V1.0.11'].includes(room.rules)) ||
+    !Array.isArray(room.members) ||
+    room.members.length !== count ||
+    !validIndex(room.host) ||
+    (room.nextHandReady !== undefined &&
+      (!Array.isArray(room.nextHandReady) ||
+        new Set(room.nextHandReady).size !== room.nextHandReady.length ||
+        room.nextHandReady.some((seat) => !validIndex(seat))))
+  )
+    throw new RoomModeArchiveError();
+  const members = room.members.filter((member) => member !== null);
+  if (
+    members.some(
+      (member) =>
+        !isRecord(member) ||
+        typeof member.session !== 'string' ||
+        !member.session ||
+        typeof member.name !== 'string' ||
+        typeof member.ready !== 'boolean' ||
+        !Number.isFinite(member.joined),
+    ) ||
+    new Set(members.map((member) => member.session)).size !== members.length
+  )
+    throw new RoomModeArchiveError();
+  if (room.match) {
+    const match = room.match;
+    const hand = match.currentHand;
+    if (
+      !hand ||
+      match.ruleSetId !== id ||
+      hand.ruleSetId !== id ||
+      match.totalEffectiveDealerTurns !== getRuleSet(id).totalEffectiveDealerTurns ||
+      !Number.isInteger(match.effectiveDealerTurn) ||
+      match.effectiveDealerTurn < 1 ||
+      match.effectiveDealerTurn > match.totalEffectiveDealerTurns ||
+      !validIndex(match.dealerIndex) ||
+      !validIndex(hand.dealerIndex) ||
+      !validIndex(hand.currentPlayerIndex) ||
+      !Array.isArray(hand.players) ||
+      hand.players.length !== count ||
+      !Array.isArray(match.cumulativeScores) ||
+      match.cumulativeScores.length !== count ||
+      !match.cumulativeScores.every(Number.isSafeInteger)
+    )
+      throw new RoomModeArchiveError();
+    if (id === 'nanjing-open-duo') {
+      if (
+        hand.legacyThreeMouth ||
+        !Array.isArray(hand.threeMouthState) ||
+        hand.threeMouthState.length !== count ||
+        !hand.handProgressFacts ||
+        hand.handProgressFacts.followDiscardPenaltyCount !== 0 ||
+        hand.handProgressFacts.fourWindsGatheredCount !== 0 ||
+        !Array.isArray(hand.pendingScoringEvents) ||
+        hand.players.some(
+          (player, index) =>
+            !player ||
+            player.id !== index ||
+            !Array.isArray(player.melds) ||
+            player.melds.some(
+              (meld) =>
+                meld.fromPlayerIndex !== undefined &&
+                (!validIndex(meld.fromPlayerIndex) || meld.fromPlayerIndex === index),
+            ),
+        ) ||
+        (hand.result !== undefined && !isValidHandResult(hand.result, count)) ||
+        (hand.phase === 'ended' && !hand.result) ||
+        hand.pendingScoringEvents.some(
+          (event) => event.type === 'hu-resolved' && !isValidPendingHuScoringEvent(event, count),
+        ) ||
+        !Array.isArray(match.completedHands) ||
+        match.completedHands.some(
+          (summary) =>
+            !validIndex(summary.dealerIndex) || !isValidHandResult(summary.result, count),
+        )
+      )
+        throw new RoomModeArchiveError();
+      if (
+        !isRecord(room.reactions) ||
+        Object.keys(room.reactions).some((seat) => !validIndex(Number(seat)))
+      )
+        throw new RoomModeArchiveError();
+      const facts = hand.handProgressFacts;
+      const factNames = [
+        'successfulAnGangCount',
+        'successfulMingOrBuGangCount',
+        'flowerKongCount',
+        'gangKaiCount',
+        'packageSettlementCount',
+        'selfDrawCount',
+        'followDiscardPenaltyCount',
+        'fourIdenticalDiscardsPenaltyCount',
+        'fourWindsGatheredCount',
+      ] as const;
+      if (
+        factNames.some((key) => !Number.isSafeInteger(facts[key]) || facts[key] < 0) ||
+        match.cumulativeScores.reduce((sum, score) => sum + score, 0) !== 2000 ||
+        hand.threeMouthState.some(
+          (mouth, seat) =>
+            !mouth ||
+            (mouth.status === 'active'
+              ? !validIndex(mouth.payerPlayerIndex) || mouth.payerPlayerIndex === seat
+              : mouth.status === 'tracking'
+                ? ![0, 1, 2].includes(mouth.mouthCount) ||
+                  (mouth.lockedPayerPlayerIndex !== null &&
+                    (!validIndex(mouth.lockedPayerPlayerIndex) ||
+                      mouth.lockedPayerPlayerIndex === seat))
+                : mouth.status !== 'invalid'),
+        )
+      )
+        throw new RoomModeArchiveError();
+      const validTransfers = (transfers: ScoreLine['transfers']) =>
+        Array.isArray(transfers) &&
+        transfers.length === 1 &&
+        transfers.every(
+          (transfer) =>
+            transfer &&
+            validIndex(transfer.from) &&
+            validIndex(transfer.to) &&
+            transfer.from !== transfer.to &&
+            Number.isSafeInteger(transfer.amount) &&
+            transfer.amount > 0,
+        );
+      if (
+        !Array.isArray(room.scores) ||
+        room.scores.some(
+          (score) =>
+            !score ||
+            !validTransfers(score.transfers) ||
+            (score.calculation &&
+              (score.calculation.payments !== 1 ||
+                score.calculation.perPayment !== score.transfers[0]!.amount ||
+                score.calculation.total !== score.transfers[0]!.amount)),
+        ) ||
+        hand.pendingScoringEvents.some(
+          (event) =>
+            !event ||
+            !Array.isArray(event.transfers) ||
+            !validTransfers(
+              event.transfers.map((transfer: ScoreTransfer) => ({
+                from: transfer?.fromPlayerIndex,
+                to: transfer?.toPlayerIndex,
+                amount: transfer?.amount,
+              })),
+            ) ||
+            (event.type === 'special-discard' && event.source !== 'four-identical-discards') ||
+            (event.type === 'package-resolved' && !isValidHandResult(event.result, count)),
+        )
+      )
+        throw new RoomModeArchiveError();
+    }
+  }
+}
+
+function validateEventMode(event: TableEvent, playerCount: number): void {
+  const raw = event as unknown as Record<string, unknown>;
+  const seats = ['seat', 'dealer', 'fromSeat', 'responsibleSeat'].flatMap((key) =>
+    raw[key] == null ? [] : [raw[key]],
+  );
+  if (Array.isArray(raw.winnerSeats)) seats.push(...raw.winnerSeats);
+  if (Array.isArray(raw.changes)) seats.push(...raw.changes.map((change) => change.seat));
+  if (
+    seats.some(
+      (seat) => !Number.isInteger(seat) || Number(seat) < 0 || Number(seat) >= playerCount,
+    ) ||
+    (playerCount === 2 && event.type === 'special-rule-confirmed' && event.rule !== 'flower-kong')
+  )
+    throw new RoomModeArchiveError();
+}
+
+export function roomForSave(room: SavedRoom): SavedRoom {
+  return { ...restoreRoomRules({ ...room }), format: 2 };
 }
 type TableEventInput = TableEvent extends infer Event
   ? Event extends TableEvent
@@ -316,7 +526,7 @@ function parseTableEvent(value: unknown): TableEvent {
   }
   return invalidTableEvent();
 }
-function restoreTableEvents(room: Record<string, unknown>): void {
+function restoreTableEvents(room: Record<string, unknown>, playerCount = 4): void {
   const fields = [
     'tableEventSchemaVersion',
     'tableEvents',
@@ -355,6 +565,7 @@ function restoreTableEvents(room: Record<string, unknown>): void {
   )
     throw new TableEventArchiveError('corrupt', '事件历史或计数器字段损坏');
   const events = room.tableEvents.map(parseTableEvent);
+  events.forEach((event) => validateEventMode(event, playerCount));
   if (
     room.tableEventSchemaVersion === 1 &&
     events.some((event) => event.type === 'special-rule-confirmed' || event.type === 'mouth-locked')
@@ -376,9 +587,10 @@ function restoreTableEvents(room: Record<string, unknown>): void {
 }
 /** Upgrade rule metadata without rewriting history; preserve the V1.0.8 three-mouth flow. */
 export function restoreRoomRules<T extends SavedRoom>(room: T): T {
-  if (room.format !== 1 || !['V1.0.8', 'V1.0.9', 'V1.0.10', 'V1.0.11'].includes(room.rules))
-    throw new Error('房间存档版本不兼容');
-  restoreTableEvents(room as unknown as Record<string, unknown>);
+  const ruleSetId = roomRuleSet(room);
+  validateRoomMode(room, ruleSetId);
+  restoreTableEvents(room as unknown as Record<string, unknown>, getRuleSet(ruleSetId).playerCount);
+  room.ruleSetId = ruleSetId;
   if (room.rules === 'V1.0.9' || room.rules === 'V1.0.10') room.rules = 'V1.0.11';
   if (room.rules === 'V1.0.8' && room.match) {
     room.match = {
@@ -410,6 +622,7 @@ export function appendTableEvents(
       sequence: room.nextTableEventSequence + index,
     }),
   );
+  appended.forEach((event) => validateEventMode(event, getRuleSet(roomRuleSet(room)).playerCount));
   room.nextTableEventId += appended.length;
   room.nextTableEventSequence += appended.length;
   if (appended.length) room.tableEventSchemaVersion = 2;
@@ -648,8 +861,8 @@ function specialRuleEvents(hand: number, before: GameState, after: GameState): T
     });
 }
 
-function scoreChanges(scores: readonly ScoreLine[]): TableScoreChange[] {
-  const deltas = [0, 0, 0, 0];
+function scoreChanges(scores: readonly ScoreLine[], playerCount = 4): TableScoreChange[] {
+  const deltas = Array<number>(playerCount).fill(0);
   for (const score of scores)
     for (const transfer of score.transfers) {
       deltas[transfer.from]! -= transfer.amount;
@@ -710,8 +923,12 @@ function resultEvents(room: SavedRoom, before: GameState, after: GameState): Tab
 }
 
 export function start(room: SavedRoom): void {
-  room.rules = 'V1.0.11';
-  room.match = createMatch({ dealerIndex: randomInt(4) });
+  const ruleSetId = roomRuleSet(room);
+  room.rules = ruleSetId === 'nanjing-open-duo' ? 'V1.0.12' : 'V1.0.11';
+  room.match = createMatch({
+    ruleSetId,
+    dealerIndex: randomInt(getRuleSet(ruleSetId).playerCount),
+  });
   room.status = 'playing';
   room.scores = [];
   room.reactions = {};
@@ -771,7 +988,7 @@ function settle(room: SavedRoom): void {
         to: t.toPlayerIndex,
         amount: t.amount,
       })),
-      calculation: explainNanjingScore(event),
+      calculation: explainNanjingScore(event, match.ruleSetId),
       ...(event.type === 'hu-resolved' && (event.threeMouthResolution || event.packageKind)
         ? {
             responsibility: {
@@ -807,7 +1024,7 @@ function settle(room: SavedRoom): void {
     room.scores.slice(scoreStart).map((score) => ({
       type: 'score-changed',
       hand: score.hand,
-      changes: scoreChanges([score]),
+      changes: scoreChanges([score], match.currentHand.players.length),
       reason: score.reason,
     })),
   );
@@ -839,7 +1056,10 @@ export function advance(room: SavedRoom): void {
             hand,
             result: game.result!.type === 'draw' ? 'draw' : 'hu',
             ...outcome,
-            changes: scoreChanges(room.scores.filter((score) => score.hand === hand)),
+            changes: scoreChanges(
+              room.scores.filter((score) => score.hand === hand),
+              game.players.length,
+            ),
           },
         ]);
       }
@@ -895,6 +1115,10 @@ export function confirmNextHand(
   secret: string,
 ): void {
   if (
+    !Number.isInteger(seat) ||
+    seat < 0 ||
+    seat >= room.members.length ||
+    !room.members[seat] ||
     room.status !== 'playing' ||
     room.remainingMs === null ||
     room.match?.currentHandStatus !== 'completed' ||
@@ -903,7 +1127,7 @@ export function confirmNextHand(
     throw new Error('本局结算已结束，请刷新牌局状态');
   if (paused(room, online)) throw new Error('有玩家掉线，等待重连后再开始');
   room.nextHandReady = [...new Set([...(room.nextHandReady ?? []), seat])];
-  if (room.nextHandReady.length === 4) nextHand(room);
+  if (room.nextHandReady.length === getRuleSet(roomRuleSet(room)).playerCount) nextHand(room);
 }
 export function nextHand(room: SavedRoom): void {
   if (!room.match || room.match.currentHandStatus !== 'completed') return;
@@ -981,6 +1205,8 @@ export function view(
   const stopped = paused(room, online);
   const diHuStage = game?.turnStage === 'waiting-for-di-hu-decision';
   return {
+    ruleSetId: roomRuleSet(room),
+    totalEffectiveDealerTurns: getRuleSet(roomRuleSet(room)).totalEffectiveDealerTurns,
     id: room.id,
     revision: room.revision,
     self,

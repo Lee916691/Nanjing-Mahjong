@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { CommandAck } from '@nanjing-mahjong/shared-types';
-import { restoreRoomRules } from '../apps/server/src/table.js';
+import { restoreRoomRules, roomForSave } from '../apps/server/src/table.js';
 import type { SavedRoom } from '../apps/server/src/table.js';
 export const LEASE_MS = 6000;
 export const IDLE_MS = 30 * 60 * 1000;
@@ -200,13 +200,22 @@ export class CloudStore {
             .prepare(
               `INSERT OR IGNORE INTO cloud_rooms(id,body,version,operation) SELECT ?,?,0,? WHERE ${access} AND ${noReceipt}`,
             )
-            .bind(room.id, JSON.stringify(room), op, session, peer, room.id, session, ack.commandId)
+            .bind(
+              room.id,
+              JSON.stringify(roomForSave(room)),
+              op,
+              session,
+              peer,
+              room.id,
+              session,
+              ack.commandId,
+            )
         : this.db
             .prepare(
               `UPDATE cloud_rooms SET body=?,version=version+1,operation=? WHERE id=? AND version=? AND ${access} AND ${noReceipt}`,
             )
             .bind(
-              JSON.stringify(room),
+              JSON.stringify(roomForSave(room)),
               op,
               room.id,
               version,
@@ -245,7 +254,7 @@ export class CloudStore {
       .prepare(
         'UPDATE cloud_rooms SET body=?,version=version+1,operation=? WHERE id=? AND version=?',
       )
-      .bind(JSON.stringify(room), randomBytes(16).toString('hex'), room.id, version)
+      .bind(JSON.stringify(roomForSave(room)), randomBytes(16).toString('hex'), room.id, version)
       .run();
     return result.meta.changes === 1;
   }

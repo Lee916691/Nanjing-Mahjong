@@ -1,10 +1,11 @@
-import { NANJING_OPEN_RULE_SET } from './nanjing-open.js';
+import { NANJING_OPEN_RULE_SET, NANJING_OPEN_DUO_RULE_SET } from './nanjing-open.js';
 import type { RuleSet, RuleSetId } from './RuleSet.js';
 
 export const DEFAULT_RULE_SET_ID: RuleSetId = 'nanjing-open';
 
 export const RULE_SET_REGISTRY = {
-  [NANJING_OPEN_RULE_SET.id]: NANJING_OPEN_RULE_SET,
+  'nanjing-open': NANJING_OPEN_RULE_SET,
+  'nanjing-open-duo': NANJING_OPEN_DUO_RULE_SET,
 } as const satisfies Record<RuleSetId, RuleSet>;
 
 export function getRuleSet(ruleSetId: RuleSetId = DEFAULT_RULE_SET_ID): RuleSet {
@@ -17,11 +18,15 @@ export function getRuleSet(ruleSetId: RuleSetId = DEFAULT_RULE_SET_ID): RuleSet 
   return ruleSet;
 }
 
+export function isRuleSetId(value: unknown): value is RuleSetId {
+  return value === 'nanjing-open' || value === 'nanjing-open-duo';
+}
+
 export function listRuleSets(): RuleSet[] {
   return Object.values(RULE_SET_REGISTRY);
 }
 
-export { NANJING_OPEN_RULE_SET } from './nanjing-open.js';
+export { NANJING_OPEN_RULE_SET, NANJING_OPEN_DUO_RULE_SET } from './nanjing-open.js';
 export type {
   AnGangScoringContext,
   BuGangReactionAvailabilityContext,

@@ -386,6 +386,7 @@ export interface DrawHandResult {
 }
 
 export interface WinHandWinner {
+  readonly packageKind?: 'three-mouth' | 'three-pure' | 'global';
   readonly playerIndex: number;
   readonly payerPlayerIndex?: number;
   readonly evaluation: HuEvaluation;
@@ -427,6 +428,7 @@ export interface PackageEvaluation {
 }
 
 export type SoftFlowerKind =
+  | 'self-draw'
   | 'missing-suit'
   | 'exposed-kong'
   | 'concealed-kong'
@@ -500,12 +502,7 @@ export type ThreeMouthPlayerState =
   | { readonly status: 'active'; readonly payerPlayerIndex: number }
   | { readonly status: 'invalid' };
 
-export type ThreeMouthState = readonly [
-  ThreeMouthPlayerState,
-  ThreeMouthPlayerState,
-  ThreeMouthPlayerState,
-  ThreeMouthPlayerState,
-];
+export type ThreeMouthState = readonly ThreeMouthPlayerState[];
 
 export interface DiHuDecisionAvailability {
   readonly playerIndex: number;

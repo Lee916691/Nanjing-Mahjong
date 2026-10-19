@@ -1,5 +1,12 @@
 # Room and Match State Machine
 
+> Implemented extension, 2026-10-19: the text below retains the original four-player baseline.
+> The two-player mode uses two online ready members, two confirmations to skip the
+> 45-second hand review, and eight effective dealer turns with final-turn continuation at turn eight.
+> Mode stays fixed across rematches; disconnection pauses and never changes the mode or player count.
+> See [two-player design](two-player-mode.md) and authoritative rules chapter 29 in
+> [the rules specification](nanjing-mahjong-rules.md). Automated tests pass; natural human play remains pending.
+
 Room waiting → playing → completed (normal) or ended (host termination). completed/ended → waiting through host rematch. Four online prepared members are required for start.
 
 While playing, any disconnected member causes a derived paused state. Seats and pending decisions remain stored. All four online resumes; no timeout passes or AI actions.

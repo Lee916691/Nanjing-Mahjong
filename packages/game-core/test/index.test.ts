@@ -1032,7 +1032,7 @@ describe('Nanjing Mahjong RuleSet registry', () => {
     expect(ruleSet.validateAction(state, action)).toBe(true);
     expect(ruleSet.applyAction(state, action)).toBe(state);
     expect(typeof ruleSet.getAvailableReactions).toBe('function');
-    expect(listRuleSets()).toEqual([NANJING_OPEN_RULE_SET]);
+    expect(listRuleSets().map((entry) => entry.id)).toEqual(['nanjing-open', 'nanjing-open-duo']);
   });
 
   it('creates deterministic current-rule MingGang and flower-kong transfer snapshots', () => {

@@ -1,7 +1,7 @@
 import { applyAction, createGame, startGame } from './engine.js';
 import type { GameAction } from './actions.js';
 import { isValidHandResult, isValidPendingHuScoringEvent } from './hu.js';
-import { copyPlayers, SEATS } from './player.js';
+import { copyPlayers } from './player.js';
 import type { Seat } from './player.js';
 import { DEFAULT_RULE_SET_ID, getRuleSet } from './rules/index.js';
 import type { RuleSetId } from './rules/index.js';
@@ -97,7 +97,7 @@ export function createMatch(options: MatchCreationOptions = {}): MatchState {
     currentHandIndex: 0,
     currentHandStatus: 'not-started',
     currentHand,
-    cumulativeScores: SEATS.map(() => INITIAL_SCORE),
+    cumulativeScores: currentHand.players.map(() => INITIAL_SCORE),
     completedHands: [],
     isFinalDealerTurn: FIRST_EFFECTIVE_DEALER_TURN === ruleSet.totalEffectiveDealerTurns,
   };
@@ -187,6 +187,7 @@ export function applyGameActionToMatch(match: MatchState, action: GameAction): M
 }
 
 export function settlePendingScoringEvents(match: MatchState): MatchState {
+  validateMatchMode(match);
   const events: unknown = match.currentHand?.pendingScoringEvents;
   if (!Array.isArray(events)) {
     throw settlementError('pendingScoringEvents must be an array');
@@ -195,12 +196,13 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
 
   const players: unknown = match.currentHand?.players;
   const scores: unknown = match.cumulativeScores;
-  if (!Array.isArray(players) || players.length !== 4) {
-    throw settlementError('players must contain exactly four entries');
+  const playerCount = getRuleSet(match.ruleSetId).playerCount;
+  if (!Array.isArray(players) || players.length !== playerCount) {
+    throw settlementError('players must match the rule set player count');
   }
   if (
     !Array.isArray(scores) ||
-    scores.length !== 4 ||
+    scores.length !== playerCount ||
     scores.length !== players.length ||
     !scores.every((score) => Number.isFinite(score) && Number.isInteger(score))
   ) {
@@ -224,7 +226,7 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
       const result = candidate.result;
       if (
         !Array.isArray(candidate.transfers) ||
-        candidate.transfers.length !== 3 ||
+        candidate.transfers.length !== playerCount - 1 ||
         !candidate.transfers.every(
           (t: Record<string, unknown>) =>
             t.fromPlayerIndex === result.payerPlayerIndex &&
@@ -285,6 +287,8 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
         throw settlementError(`event ${eventIndex} createdDuring is invalid`);
       }
     } else if (candidate.type === 'special-discard') {
+      if (playerCount === 2 && candidate.source !== 'four-identical-discards')
+        throw settlementError('Disabled two-player discard rule');
       if (!isValidPendingSpecialDiscardScoringEvent(candidate, players.length)) {
         throw settlementError(`event ${eventIndex} special discard metadata is invalid`);
       }
@@ -295,6 +299,8 @@ export function settlePendingScoringEvents(match: MatchState): MatchState {
     if (!Array.isArray(candidate.transfers) || candidate.transfers.length === 0) {
       throw settlementError(`event ${eventIndex} transfers must be a non-empty array`);
     }
+    if (playerCount === 2 && candidate.transfers.length !== 1)
+      throw settlementError('Two-player events require exactly one transfer');
     if (candidate.type === 'hu-resolved' && candidate.threeMouthResolution !== undefined) {
       const metadata = candidate.threeMouthResolution;
       const transfers = candidate.transfers as unknown[];
@@ -434,6 +440,7 @@ function isTileIdForFace(value: unknown, face: Record<string, unknown>): boolean
 }
 
 export function completeCurrentHand(match: MatchState): MatchState {
+  validateMatchMode(match);
   if (match.status !== 'playing') {
     throw new Error('Current match must be playing before a hand can complete');
   }
@@ -446,7 +453,7 @@ export function completeCurrentHand(match: MatchState): MatchState {
     match.currentHand.phase !== 'ended' ||
     !isValidHandResult(match.currentHand.result, match.currentHand.players.length) ||
     !isValidDiHuWinners(match.currentHand.result, match.dealerIndex) ||
-    !isValidHandProgressFacts(match.currentHand.handProgressFacts)
+    !isValidHandProgressFacts(match.currentHand.handProgressFacts, match.currentHand.players.length)
   ) {
     throw new Error('Current hand must be ended with a valid result before it can complete');
   }
@@ -469,7 +476,7 @@ export function completeCurrentHand(match: MatchState): MatchState {
 
   const shouldAdvanceDealer = completion.dealerTransition === 'advance';
   const nextDealerIndex = shouldAdvanceDealer
-    ? getNextDealerIndex(match.dealerIndex)
+    ? getNextDealerIndex(match.dealerIndex, match.currentHand.players.length)
     : match.dealerIndex;
   const nextEffectiveDealerTurn = shouldAdvanceDealer
     ? Math.min(match.effectiveDealerTurn + 1, match.totalEffectiveDealerTurns)
@@ -578,8 +585,13 @@ function hasFinalTurnContinuation(result: HandResult, facts: HandProgressFacts):
   );
 }
 
-function isValidHandProgressFacts(value: unknown): value is HandProgressFacts {
+function isValidHandProgressFacts(value: unknown, playerCount = 4): value is HandProgressFacts {
   if (!isRecord(value)) return false;
+  if (
+    playerCount === 2 &&
+    (value.followDiscardPenaltyCount !== 0 || value.fourWindsGatheredCount !== 0)
+  )
+    return false;
   return [
     value.successfulAnGangCount,
     value.successfulMingOrBuGangCount,
@@ -658,6 +670,19 @@ function syncHandDealer(hand: GameState, dealerIndex: number): GameState {
   };
 }
 
-function getNextDealerIndex(dealerIndex: number): number {
-  return (dealerIndex + 1) % SEATS.length;
+function getNextDealerIndex(dealerIndex: number, playerCount = 4): number {
+  return (dealerIndex + 1) % playerCount;
+}
+
+function validateMatchMode(match: MatchState): void {
+  const rules = getRuleSet(match.ruleSetId);
+  if (
+    match.currentHand.ruleSetId !== rules.id ||
+    match.totalEffectiveDealerTurns !== rules.totalEffectiveDealerTurns ||
+    !Array.isArray(match.currentHand.players) ||
+    match.currentHand.players.length !== rules.playerCount ||
+    !Array.isArray(match.cumulativeScores) ||
+    match.cumulativeScores.length !== rules.playerCount
+  )
+    throw settlementError('Match mode, player count or dealer turns are inconsistent');
 }

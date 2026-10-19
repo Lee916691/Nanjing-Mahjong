@@ -49,10 +49,10 @@ export function threeMouthRoom(selfDraw = false) {
           : [],
     })),
     threeMouthState: [
-      base.threeMouthState[0],
+      base.threeMouthState[0]!,
       { status: 'active', payerPlayerIndex: 0 },
-      base.threeMouthState[2],
-      base.threeMouthState[3],
+      base.threeMouthState[2]!,
+      base.threeMouthState[3]!,
     ],
     ...(selfDraw
       ? {

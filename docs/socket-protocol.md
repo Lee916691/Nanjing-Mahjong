@@ -1,5 +1,13 @@
 # Socket Protocol
 
+> The following is the original Socket.IO protocol baseline; the current Sites path uses HTTP
+> commands with NDJSON streaming and polling fallback. The implemented two-player extension is specified
+> in [two-player design](two-player-mode.md), section 5.2: optional validated `ruleSetId` on create
+> only, required mode and total effective turns in the per-player view, and fixed room mode.
+> Existing identity, action-token, private-response and idempotency boundaries remain required.
+> These fields are implemented. Mode-incompatible archives return ROOM_MODE_ARCHIVE_INCOMPATIBLE
+> (HTTP 503, or a final error frame on an already-open stream). Invalid create modes return BAD_REQUEST.
+
 ## Identity
 
 POST /api/session creates or restores a random HttpOnly SameSite=Strict cookie. The response contains only the current room ID. Socket.IO authenticates this cookie; a replacement connection takes over the seat. Clients never send a player index or authoritative game state.

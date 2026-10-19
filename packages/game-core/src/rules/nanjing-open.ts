@@ -56,13 +56,14 @@ export function forcedPackageTransfers(
   evaluation: PackageEvaluation,
   winner: number,
   payer: number,
+  playerCount = 4,
 ): ScoreTransfer[] {
   const amount =
     2 *
     (10 +
       evaluation.patterns.reduce((sum, p) => sum + PATTERN_POINTS[p], 0) +
       2 * (evaluation.hardFlowerCount + evaluation.softFlowerCount));
-  return Array.from({ length: 3 }, () => ({
+  return Array.from({ length: playerCount - 1 }, () => ({
     fromPlayerIndex: payer,
     toPlayerIndex: winner,
     amount,
@@ -71,6 +72,7 @@ export function forcedPackageTransfers(
 
 export const NANJING_OPEN_RULE_SET: RuleSet = {
   id: 'nanjing-open',
+  playerCount: 4,
   displayName: '\u5357\u4eac\u9ebb\u5c06\u657e\u5f00\u5934',
   totalEffectiveDealerTurns: 16,
   validateAction: () => true,
@@ -127,10 +129,64 @@ export const NANJING_OPEN_RULE_SET: RuleSet = {
     })),
 };
 
+export function withSelfDrawFlowers<T extends PackageEvaluation>(evaluation: T): T {
+  if (
+    evaluation.patterns.includes('tian-hu') ||
+    evaluation.softFlowerItems?.some((item) => item.kind === 'self-draw')
+  )
+    return evaluation;
+  return {
+    ...evaluation,
+    softFlowerCount: evaluation.softFlowerCount + 2,
+    softFlowerItems: [...(evaluation.softFlowerItems ?? []), { kind: 'self-draw', count: 2 }],
+  };
+}
+
+export const NANJING_OPEN_DUO_RULE_SET: RuleSet = {
+  ...NANJING_OPEN_RULE_SET,
+  id: 'nanjing-open-duo',
+  displayName: '南京麻将双人敞开头',
+  playerCount: 2,
+  totalEffectiveDealerTurns: 8,
+  evaluateHu: (context) => {
+    if (
+      context.playerCount !== 2 ||
+      !isPlayerIndex(context.winnerPlayerIndex, 2) ||
+      (context.source !== 'self-draw' && !isPlayerIndex(context.payerPlayerIndex, 2))
+    )
+      return null;
+    const evaluation = evaluateNanjingOpenHu(context);
+    return evaluation && context.source === 'self-draw'
+      ? withSelfDrawFlowers(evaluation)
+      : evaluation;
+  },
+  getAnGangScoreTransfers: (context) =>
+    NANJING_OPEN_RULE_SET.getAnGangScoreTransfers(context).map((transfer) => ({
+      ...transfer,
+      amount: 20,
+    })),
+  getHuScoreTransfers: (context) =>
+    NANJING_OPEN_RULE_SET.getHuScoreTransfers(
+      context.source === 'rob-bu-gang' ? { ...context, source: 'discard' } : context,
+    ),
+  getThreeMouthForcedHuResolution: (context) => getThreeMouthForcedHuResolution(context, 2),
+  getSpecialDiscardScoreTransfers: (context) =>
+    context.source === 'four-identical-discards' && isValidSpecialDiscardScoringContext(context, 2)
+      ? [
+          {
+            fromPlayerIndex: context.payerPlayerIndex,
+            toPlayerIndex: 1 - context.payerPlayerIndex,
+            amount: 10,
+          },
+        ]
+      : [],
+};
+
 function getThreeMouthForcedHuResolution(
   context: ThreeMouthForcedHuContext,
+  playerCount = 4,
 ): ThreeMouthForcedHuResolution | null {
-  if (!isValidThreeMouthForcedHuContext(context)) return null;
+  if (!isValidThreeMouthForcedHuContext(context, playerCount)) return null;
   const allTiles = [
     ...context.concealedTiles,
     context.winningTile,
@@ -161,13 +217,14 @@ function getThreeMouthForcedHuResolution(
   }
   const structure: HuStructure = { type: 'three-mouth-forced', trigger: context.trigger };
   const softFlowerItems = softFlowerBreakdown(context, structure, patterns, false);
-  const evaluation: HuEvaluation = {
+  const baseEvaluation: HuEvaluation = {
     structure,
     patterns,
     hardFlowerCount: context.flowers.length,
     softFlowerCount: softFlowerItems.reduce((total, item) => total + item.count, 0),
     softFlowerItems,
   };
+  const evaluation = playerCount === 2 ? withSelfDrawFlowers(baseEvaluation) : baseEvaluation;
   const unmultiplied =
     10 +
     patterns.reduce((total, pattern) => total + PATTERN_POINTS[pattern], 0) +
@@ -191,12 +248,15 @@ function getThreeMouthForcedHuResolution(
   };
 }
 
-function isValidThreeMouthForcedHuContext(value: unknown): value is ThreeMouthForcedHuContext {
+function isValidThreeMouthForcedHuContext(
+  value: unknown,
+  playerCount = 4,
+): value is ThreeMouthForcedHuContext {
   if (
     !isRecord(value) ||
-    value.playerCount !== 4 ||
-    !isPlayerIndex(value.winnerPlayerIndex) ||
-    !isPlayerIndex(value.payerPlayerIndex) ||
+    value.playerCount !== playerCount ||
+    !isPlayerIndex(value.winnerPlayerIndex, playerCount) ||
+    !isPlayerIndex(value.payerPlayerIndex, playerCount) ||
     value.winnerPlayerIndex === value.payerPlayerIndex ||
     !isValidOrdinaryHandTile(value.winningTile) ||
     !Array.isArray(value.concealedTiles) ||
@@ -230,7 +290,8 @@ function isValidThreeMouthForcedHuContext(value: unknown): value is ThreeMouthFo
     'formedFlowerKongDuringReplacement',
   ];
   if (Object.keys(value).some((key) => !allowedKeys.includes(key))) return false;
-  if (value.dealerIndex !== undefined && !isPlayerIndex(value.dealerIndex)) return false;
+  if (value.dealerIndex !== undefined && !isPlayerIndex(value.dealerIndex, playerCount))
+    return false;
   if (value.diHuDeclaration !== undefined && !isValidDiHuDeclaration(value.diHuDeclaration)) {
     return false;
   }
@@ -261,7 +322,7 @@ function isValidThreeMouthForcedHuContext(value: unknown): value is ThreeMouthFo
   ).length;
   if (value.source === 'discard') {
     return (
-      isPlayerIndex(value.discarderPlayerIndex) &&
+      isPlayerIndex(value.discarderPlayerIndex, playerCount) &&
       value.discarderPlayerIndex !== value.winnerPlayerIndex &&
       (value.forcedBasePattern === 'global-single-wait') ===
         (value.discarderPlayerIndex === value.payerPlayerIndex) &&
@@ -355,17 +416,21 @@ function getSpecialDiscardScoreTransfers(context: unknown) {
 
 function isValidSpecialDiscardScoringContext(
   value: unknown,
+  playerCount = 4,
 ): value is SpecialDiscardScoringContext {
-  if (!isRecord(value) || value.playerCount !== 4) return false;
+  if (!isRecord(value) || value.playerCount !== playerCount) return false;
   if (value.source === 'four-winds-gathered') {
     return (
       hasOnlyKeys(value, ['source', 'playerCount', 'receiverPlayerIndex', 'completingWind']) &&
-      isPlayerIndex(value.receiverPlayerIndex) &&
+      isPlayerIndex(value.receiverPlayerIndex, playerCount) &&
       WIND_TILE_KINDS.some((wind) => wind === value.completingWind)
     );
   }
   if (value.source !== 'follow-discard' && value.source !== 'four-identical-discards') return false;
-  if (!isPlayerIndex(value.payerPlayerIndex) || !isValidOrdinaryTileFaceValue(value.tileFace))
+  if (
+    !isPlayerIndex(value.payerPlayerIndex, playerCount) ||
+    !isValidOrdinaryTileFaceValue(value.tileFace)
+  )
     return false;
   return value.source === 'four-identical-discards'
     ? hasOnlyKeys(value, ['source', 'playerCount', 'payerPlayerIndex', 'tileFace'])
@@ -376,7 +441,7 @@ function isValidSpecialDiscardScoringContext(
         'triggeringPlayerIndex',
         'tileFace',
       ]) &&
-        isPlayerIndex(value.triggeringPlayerIndex) &&
+        isPlayerIndex(value.triggeringPlayerIndex, playerCount) &&
         value.triggeringPlayerIndex !== value.payerPlayerIndex;
 }
 
@@ -384,8 +449,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function isPlayerIndex(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 4;
+function isPlayerIndex(value: unknown, playerCount = 4): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < playerCount;
 }
 
 function isValidOrdinaryTileFaceValue(value: unknown): value is OrdinaryTileFace {

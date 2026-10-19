@@ -26,8 +26,10 @@ export interface PlayerState {
   readonly buGangDrawProvenance: readonly BuGangDrawProvenance[];
 }
 
-export function createInitialPlayers(dealerIndex = 0): PlayerState[] {
-  return SEATS.map((seat, index): PlayerState => ({
+export function createInitialPlayers(dealerIndex = 0, playerCount = 4): PlayerState[] {
+  if ((playerCount !== 2 && playerCount !== 4) || dealerIndex < 0 || dealerIndex >= playerCount)
+    throw new Error('Invalid player count or dealer');
+  return SEATS.slice(0, playerCount).map((seat, index): PlayerState => ({
     id: index,
     seat,
     hand: [],

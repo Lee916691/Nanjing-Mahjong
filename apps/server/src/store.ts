@@ -3,8 +3,14 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { CommandAck } from '@nanjing-mahjong/shared-types';
-import { restoreRoomRules } from './table.js';
+import { restoreRoomRules, roomForSave } from './table.js';
 import type { SavedRoom } from './table.js';
+
+export class ReceiptConflictError extends Error {
+  constructor() {
+    super('操作编号已用于其他请求');
+  }
+}
 
 export class Store {
   readonly db: DatabaseSync;
@@ -20,12 +26,14 @@ export class Store {
     const version = this.db.prepare("SELECT value FROM metadata WHERE key='version'").get();
     if (
       version &&
-      !['1:V1.0.8', '1:V1.0.9', '1:V1.0.10', '1:V1.0.11'].includes(String(version.value))
+      !['1:V1.0.8', '1:V1.0.9', '1:V1.0.10', '1:V1.0.11', '2:room-modes'].includes(
+        String(version.value),
+      )
     ) {
       this.db.close();
       throw new Error('存档版本不兼容，请使用对应版本恢复');
     }
-    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('version','1:V1.0.11')").run();
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('version','2:room-modes')").run();
     this.db
       .prepare("INSERT OR IGNORE INTO metadata VALUES ('secret',?)")
       .run(randomBytes(32).toString('hex'));
@@ -52,25 +60,42 @@ export class Store {
         return restoreRoomRules(room);
       });
   }
-  receipt(session: string, id: string): CommandAck | undefined {
+  receipt(session: string, id: string, fingerprint?: string): CommandAck | undefined {
     const row = this.db
       .prepare('SELECT body FROM commands WHERE session=? AND id=?')
       .get(session, id);
-    return row ? (JSON.parse(String(row.body)) as CommandAck) : undefined;
+    if (!row) return undefined;
+    const value = JSON.parse(String(row.body)) as
+      CommandAck | { ack: CommandAck; fingerprint: string };
+    if ('ack' in value) {
+      if (fingerprint !== undefined && value.fingerprint !== fingerprint)
+        throw new ReceiptConflictError();
+      return value.ack;
+    }
+    return value;
   }
-  commit(room: SavedRoom | undefined, session?: string, ack?: CommandAck): void {
+  commit(
+    room: SavedRoom | undefined,
+    session?: string,
+    ack?: CommandAck,
+    fingerprint?: string,
+  ): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      if (room?.rules === 'V1.0.11')
-        this.db.prepare("UPDATE metadata SET value='1:V1.0.11' WHERE key='version'").run();
+      if (room)
+        this.db.prepare("UPDATE metadata SET value='2:room-modes' WHERE key='version'").run();
       if (room)
         this.db
           .prepare('INSERT OR REPLACE INTO rooms VALUES (?,?)')
-          .run(room.id, JSON.stringify(room));
+          .run(room.id, JSON.stringify(roomForSave(room)));
       if (session && ack)
         this.db
           .prepare('INSERT INTO commands VALUES (?,?,?)')
-          .run(session, ack.commandId, JSON.stringify(ack));
+          .run(
+            session,
+            ack.commandId,
+            JSON.stringify(fingerprint === undefined ? ack : { ack, fingerprint }),
+          );
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');

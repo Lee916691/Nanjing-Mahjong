@@ -2,6 +2,8 @@ export interface HealthResponse {
   status: 'ok';
 }
 
+export type RoomRuleSetId = 'nanjing-open' | 'nanjing-open-duo';
+
 export interface TileView {
   id: string;
   label: string;
@@ -141,6 +143,8 @@ export type TableEvent =
       summary: string;
     });
 export interface RoomView {
+  ruleSetId: RoomRuleSetId;
+  totalEffectiveDealerTurns: number;
   id: string;
   revision: number;
   self: number;
@@ -166,6 +170,7 @@ export interface RoomView {
   lastDiscard?: TileView;
 }
 export interface RoomCommand {
+  ruleSetId?: RoomRuleSetId;
   commandId: string;
   roomId?: string;
   name?: string;

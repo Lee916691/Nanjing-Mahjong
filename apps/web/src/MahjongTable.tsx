@@ -10,6 +10,7 @@ import { TableHistory } from './TableHistory';
 import type { TableHistoryState } from './table-history';
 import { SoundToggle } from './SoundToggle';
 import type { TableFeedback } from './table-feedback';
+import { relativeSeat } from './room-mode';
 
 const winds = ['东', '南', '西', '北'];
 const meldNames: Record<string, string> = {
@@ -22,15 +23,18 @@ function Meld({
   meld,
   seat,
   matching,
+  playerCount = 4,
 }: {
   meld: PlayerGameView['melds'][number];
   seat: number;
   matching: string | null;
+  playerCount?: number;
 }) {
   const claimed =
     meld.claimedTileIndex === undefined ? undefined : meld.tiles[meld.claimedTileIndex];
   const other = meld.tiles.filter((_, index) => index !== meld.claimedTileIndex);
-  const from = meld.fromSeat === undefined ? 0 : (meld.fromSeat - seat + 4) % 4;
+  const from =
+    meld.fromSeat === undefined ? 0 : playerCount === 2 ? 2 : (meld.fromSeat - seat + 4) % 4;
   const claimPosition = from === 3 ? 0 : from === 2 ? 1 : 2;
   const upgrade = meld.kind === 'bu-gang' && claimed ? other.pop() : undefined;
   const content = other.map((t) => ({ tile: t, called: false }));
@@ -67,11 +71,13 @@ function PlayerOpen({
   self,
   matching,
   feedback,
+  playerCount = 4,
 }: {
   player: PlayerGameView;
   self: boolean;
   matching: string | null;
   feedback?: TableFeedback;
+  playerCount?: number;
 }) {
   return (
     <div className="player-open" aria-label={`${player.name}的公开牌区`}>
@@ -97,7 +103,13 @@ function PlayerOpen({
         >
           {player.melds.length ? (
             player.melds.map((meld, i) => (
-              <Meld key={i} meld={meld} seat={player.seat} matching={matching} />
+              <Meld
+                key={i}
+                meld={meld}
+                seat={player.seat}
+                matching={matching}
+                playerCount={playerCount}
+              />
             ))
           ) : (
             <span className="open-empty">暂无副露</span>
@@ -119,17 +131,19 @@ function PlayerBadge({
   dealer,
   active,
   self,
+  duo = false,
 }: {
   player: PlayerGameView;
   relative: number;
   dealer: boolean;
   active: boolean;
   self: boolean;
+  duo?: boolean;
 }) {
   return (
     <article
       className={`player-badge badge--${relative} ${active ? 'active' : ''} ${!player.connected ? 'offline' : ''}`}
-      aria-label={`${player.name}，${winds[player.seat]}位，${player.score}分`}
+      aria-label={`${player.name}，${duo ? (self ? '你' : '对手') : `${winds[player.seat]}位`}，${player.score}分`}
     >
       <div className="player-avatar" aria-hidden="true">
         {player.name.slice(0, 1)}
@@ -141,7 +155,7 @@ function PlayerBadge({
           {self && <small>你</small>}
         </strong>
         <div className="player-tags">
-          <span>{winds[player.seat]}位</span>
+          <span>{duo ? (self ? '你' : '对手') : `${winds[player.seat]}位`}</span>
           {dealer && <em>庄</em>}
           {player.diHu && <em>地胡</em>}
           <span>{!player.connected ? '离线' : active ? '行动中' : '在线'}</span>
@@ -231,7 +245,11 @@ export function MahjongTable({
     }
   }
   return (
-    <section className="table" aria-label="麻将桌" ref={viewport}>
+    <section
+      className={room.ruleSetId === 'nanjing-open-duo' ? 'table table--duo' : 'table'}
+      aria-label="麻将桌"
+      ref={viewport}
+    >
       {onToggleSound && <SoundToggle muted={soundMuted} onToggle={onToggleSound} />}
       <TableNotification notice={notification} />
       <TableHistory history={history} />
@@ -266,7 +284,7 @@ export function MahjongTable({
           </div>
           {room.players.map((player, seat) => {
             if (!player) return null;
-            const relative = (seat - room.self + 4) % 4;
+            const relative = relativeSeat(room, seat);
             const active =
               enabled &&
               !room.result &&
@@ -279,6 +297,7 @@ export function MahjongTable({
                   dealer={seat === room.dealer}
                   active={active}
                   self={seat === room.self}
+                  duo={room.ruleSetId === 'nanjing-open-duo'}
                 />
                 {relative !== 0 && (
                   <div className={`opponent-station station--${relative}`} data-owner={seat}>
@@ -287,6 +306,7 @@ export function MahjongTable({
                       self={false}
                       matching={matching}
                       feedback={currentFeedback}
+                      playerCount={room.players.length}
                     />
                     <div
                       className="opponent-hand"
@@ -305,6 +325,7 @@ export function MahjongTable({
                       self
                       matching={matching}
                       feedback={currentFeedback}
+                      playerCount={room.players.length}
                     />
                   </div>
                 )}
@@ -344,25 +365,39 @@ export function MahjongTable({
                 player && (
                   <div
                     key={seat}
-                    className={`compass compass--${(seat - room.self + 4) % 4} ${room.current === seat && enabled ? 'active' : ''}`}
+                    className={`compass compass--${relativeSeat(room, seat)} ${room.current === seat && enabled ? 'active' : ''}`}
                   >
-                    {winds[seat]}
+                    {room.ruleSetId === 'nanjing-open-duo'
+                      ? seat === room.self
+                        ? '你'
+                        : '对手'
+                      : winds[seat]}
                     {seat === room.dealer && <i />}
                   </div>
                 ),
             )}
             <span className="round-label">
-              第 {Math.ceil(room.effectiveTurn / 4)} 圈 · 第 {((room.effectiveTurn - 1) % 4) + 1} 庄
+              第 {Math.ceil(room.effectiveTurn / room.players.length)} 圈 · 第{' '}
+              {((room.effectiveTurn - 1) % room.players.length) + 1} 庄
             </span>
             <strong className="remaining-tiles">
               {room.remaining}
               <small>余牌</small>
             </strong>
             <span className="hand-index">
-              第 {room.hand} 手 <i /> 敞开头
+              第 {room.hand} 手 <i />{' '}
+              {room.ruleSetId === 'nanjing-open-duo' ? '双人敞开头' : '敞开头'}
             </span>
+            {room.ruleSetId === 'nanjing-open-duo' && (
+              <span className="duo-turn-label">
+                第{room.effectiveTurn}庄
+                {room.effectiveTurn === room.totalEffectiveDealerTurns ? ' · 末庄' : ''}
+              </span>
+            )}
             <div className="round-progress">
-              <span style={{ width: `${(room.effectiveTurn / 16) * 100}%` }} />
+              <span
+                style={{ width: `${(room.effectiveTurn / room.totalEffectiveDealerTurns) * 100}%` }}
+              />
             </div>
           </div>
           <div className={`turn-banner ${canDiscard && enabled ? 'your-turn' : ''}`} role="status">

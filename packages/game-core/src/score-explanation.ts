@@ -1,5 +1,6 @@
 import type { PendingScoringEvent, PackageEvaluation, HuPattern, SoftFlowerKind } from './state.js';
 import { PATTERN_POINTS } from './rules/nanjing-open.js';
+import type { RuleSetId } from './rules/RuleSet.js';
 
 export interface ScoreBreakdown {
   terms: { label: string; points: number }[];
@@ -26,6 +27,7 @@ const patternNames: Record<HuPattern, string> = {
   'gang-kai': '杠开',
 };
 const softNames: Record<SoftFlowerKind, string> = {
+  'self-draw': '自摸加花',
   'missing-suit': '缺一',
   'exposed-kong': '明／补杠',
   'concealed-kong': '暗杠',
@@ -64,7 +66,11 @@ function huTerms(evaluation: PackageEvaluation): ScoreBreakdown['terms'] {
   return terms;
 }
 /** Describe committed rule amounts; never infer missing historical pattern details from a total. */
-export function explainNanjingScore(event: PendingScoringEvent): ScoreBreakdown | undefined {
+export function explainNanjingScore(
+  event: PendingScoringEvent,
+  ruleSetId: RuleSetId = 'nanjing-open',
+): ScoreBreakdown | undefined {
+  const duo = ruleSetId === 'nanjing-open-duo';
   let terms: ScoreBreakdown['terms'];
   let factors: ScoreBreakdown['factors'] = [{ label: '比下胡', value: 2 }];
   let winner: number | undefined;
@@ -75,7 +81,7 @@ export function explainNanjingScore(event: PendingScoringEvent): ScoreBreakdown 
       factors = [];
     } else {
       terms = huTerms(event.evaluation);
-      if (event.source === 'rob-bu-gang') factors.push({ label: '抢补杠', value: 3 });
+      if (event.source === 'rob-bu-gang' && !duo) factors.push({ label: '抢补杠', value: 3 });
     }
   } else if (event.type === 'package-resolved') {
     winner = event.result.winnerPlayerIndex;
@@ -99,7 +105,9 @@ export function explainNanjingScore(event: PendingScoringEvent): ScoreBreakdown 
       event.type,
     )
       ? 10
-      : 5;
+      : event.type === 'an-gang-created' && duo
+        ? 10
+        : 5;
     terms = [{ label, points: base }];
   }
   const perPayment =

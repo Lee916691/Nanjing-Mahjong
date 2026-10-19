@@ -74,9 +74,12 @@ export function HandResult({
             )}
           </div>
         )}
-        <div className="hand-deltas">
-          {[0, 1, 2, 3].map((seat) => {
-            const player = room.players[seat];
+        <div
+          className={
+            room.ruleSetId === 'nanjing-open-duo' ? 'hand-deltas hand-deltas--duo' : 'hand-deltas'
+          }
+        >
+          {room.players.map((player, seat) => {
             const delta = settled?.changes.find((change) => change.seat === seat)?.delta;
             return (
               <div key={seat} data-seat={seat}>
@@ -101,7 +104,13 @@ export function HandResult({
           <div className="hand-transfers">
             {scores.length ? (
               scores.map((score, i) => (
-                <ScoreDetails key={i} score={score} players={room.players} readable={readable} />
+                <ScoreDetails
+                  key={i}
+                  score={score}
+                  players={room.players}
+                  readable={readable}
+                  ruleSetId={room.ruleSetId}
+                />
               ))
             ) : (
               <p>当前快照未提供计分明细</p>
@@ -125,7 +134,7 @@ export function HandResult({
             onClick={onNextHand}
           >
             {room.nextHandReady?.includes(room.self) ? '已准备' : '开始下一把'} ·{' '}
-            {room.nextHandReady?.length ?? 0}/4
+            {room.nextHandReady?.length ?? 0}/{room.players.length}
           </button>
           <button onClick={onClose}>查看牌桌</button>
         </div>

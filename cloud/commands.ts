@@ -11,6 +11,8 @@ import {
 } from '../apps/server/src/table.js';
 import type { RoomCommand, RoomEvent } from '@nanjing-mahjong/shared-types';
 import type { CloudRoom } from './store.js';
+import { isRuleSetId } from '@nanjing-mahjong/game-core';
+import type { RuleSetId } from '@nanjing-mahjong/game-core';
 export class PublicError extends Error {
   constructor(
     readonly code: string,
@@ -34,12 +36,15 @@ export const events: readonly string[] = [
   'room:next-ready',
   'game:action',
 ];
-export function parseCommand(raw: unknown): RoomCommand {
+export function parseCommand(raw: unknown, event?: RoomEvent): RoomCommand {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
     return fail('BAD_REQUEST', '请求格式错误');
   const v = raw as Record<string, unknown>;
   if (
-    Object.keys(v).some((k) => !['commandId', 'roomId', 'name', 'ready', 'token'].includes(k)) ||
+    Object.keys(v).some(
+      (k) => !['commandId', 'roomId', 'name', 'ready', 'token', 'ruleSetId'].includes(k),
+    ) ||
+    (Object.hasOwn(v, 'ruleSetId') && (event !== 'room:create' || !isRuleSetId(v.ruleSetId))) ||
     typeof v.commandId !== 'string' ||
     !/^[\w-]{8,80}$/.test(v.commandId) ||
     (v.roomId !== undefined &&
@@ -52,9 +57,13 @@ export function parseCommand(raw: unknown): RoomCommand {
     return fail('BAD_REQUEST', '请求内容不合法');
   return v as unknown as RoomCommand;
 }
-export function createRoom(session: string, name: string): CloudRoom {
+export function createRoom(
+  session: string,
+  name: string,
+  ruleSetId: RuleSetId = 'nanjing-open',
+): CloudRoom {
   return {
-    ...newRoom(session, name),
+    ...newRoom(session, name, ruleSetId),
     cloudFormat: 1,
     secret: randomBytes(32).toString('hex'),
     clockAt: null,
@@ -90,6 +99,7 @@ export function execute(
   session: string,
   online: Set<string>,
 ): { left: boolean; disconnect: boolean } {
+  if (Object.hasOwn(cmd, 'ruleSetId')) fail('BAD_REQUEST', '房间玩法只能在创建时选择');
   let seat = room.members.findIndex((m) => m?.session === session),
     privateOnly = false;
   if (event === 'room:join') {
@@ -124,7 +134,7 @@ export function execute(
         room.status !== 'waiting' ||
         room.members.some((m) => !m?.ready || !online.has(m.session))
       )
-        fail('NOT_READY', '需要四人在线并准备');
+        fail('NOT_READY', `需要${room.members.length === 2 ? '两' : '四'}人在线并准备`);
       start(room);
       room.clockAt = null;
     } else if (event === 'room:next-ready') {
@@ -138,6 +148,7 @@ export function execute(
       if (room.status !== 'playing') fail('FORBIDDEN', '只能结束进行中的牌局', 403);
       room.status = 'ended';
       room.remainingMs = null;
+      room.nextHandReady = [];
       room.clockAt = null;
       room.epoch++;
     } else if (event === 'room:rematch') {
@@ -148,6 +159,7 @@ export function execute(
       room.reactions = {};
       room.scores = [];
       room.tableEvents = [];
+      room.nextHandReady = [];
       room.remainingMs = null;
       room.clockAt = null;
       room.epoch++;

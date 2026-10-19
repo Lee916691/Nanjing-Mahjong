@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { CloudStore, LEASE_MS } from './store.js';
 import type { Session, CloudRoom, RequestContext } from './store.js';
 import { createRoom, events, execute, fail, parseCommand, PublicError, tick } from './commands.js';
-import { TableEventArchiveError, view } from '../apps/server/src/table.js';
+import { TableEventArchiveError, RoomModeArchiveError, view } from '../apps/server/src/table.js';
 import type { CommandAck, RoomEvent, RoomView } from '@nanjing-mahjong/shared-types';
 
 export interface Env {
@@ -19,6 +19,16 @@ const eventArchiveError = {
   code: 'ROOM_EVENT_ARCHIVE_INCOMPATIBLE',
   message: '牌桌事件历史存档不兼容或已损坏，房间暂不可用，请联系管理员核查并修复存档。',
 };
+function archiveError(error: unknown) {
+  return error instanceof RoomModeArchiveError
+    ? {
+        code: 'ROOM_MODE_ARCHIVE_INCOMPATIBLE',
+        message: '房间玩法存档不兼容或已损坏，房间暂不可用，请联系管理员核查存档。',
+      }
+    : error instanceof TableEventArchiveError
+      ? eventArchiveError
+      : null;
+}
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...headers, ...extra } });
 function cookie(request: Request): string {
@@ -108,7 +118,7 @@ async function command(
   raw: unknown,
   initial: RequestContext,
 ) {
-  const cmd = parseCommand(raw);
+  const cmd = parseCommand(raw, event);
   const fingerprint = createHash('sha256')
     .update(JSON.stringify([event, cmd]))
     .digest('hex');
@@ -140,7 +150,7 @@ async function command(
       if (cmd.roomId && !/^[0-9]{6,12}$/.test(cmd.roomId))
         fail('ROOM_CODE_INVALID', '自定义房间号须为 6～12 位数字');
       if (cmd.roomId && context.loaded) fail('ROOM_CODE_TAKEN', '这个房间号已被使用，请换一个');
-      room = createRoom(session.token, cmd.name!.trim());
+      room = createRoom(session.token, cmd.name!.trim(), cmd.ruleSetId);
       if (cmd.roomId) room.id = cmd.roomId;
       version = null;
       nextRoom = room.id;
@@ -260,10 +270,11 @@ function streamState(
         );
         last = serialized;
       } catch (error) {
-        if (error instanceof TableEventArchiveError) {
-          console.error('Cloud event archive rejected', error.kind);
+        const incompatible = archiveError(error);
+        if (incompatible) {
+          console.error('Cloud room archive rejected', incompatible.code);
           if (!canceled) {
-            controller.enqueue(encoder.encode(JSON.stringify({ error: eventArchiveError }) + '\n'));
+            controller.enqueue(encoder.encode(JSON.stringify({ error: incompatible }) + '\n'));
             controller.close();
           }
         } else if (!canceled) controller.error(new Error('同步连接中断'));
@@ -385,9 +396,10 @@ export default {
       }
       return json({ error: { code: 'NOT_FOUND', message: '接口不存在' } }, 404);
     } catch (error) {
-      if (error instanceof TableEventArchiveError) {
-        console.error('Cloud event archive rejected', error.kind);
-        return json({ error: eventArchiveError }, 503);
+      const incompatible = archiveError(error);
+      if (incompatible) {
+        console.error('Cloud room archive rejected', incompatible.code);
+        return json({ error: incompatible }, 503);
       }
       if (error instanceof PublicError)
         return json({ error: { code: error.code, message: error.message } }, error.status);

@@ -12,7 +12,7 @@ import type {
 } from './state.js';
 import { ordinaryTileFace, ordinaryTileFaceKey, HU_PATTERNS } from './hu.js';
 import { getRuleSet } from './rules/index.js';
-import { forcedPackageTransfers } from './rules/nanjing-open.js';
+import { forcedPackageTransfers, withSelfDrawFlowers } from './rules/nanjing-open.js';
 export interface GlobalRack {
   tile: OrdinaryHandTile;
   wait: OrdinaryTileFace;
@@ -68,6 +68,7 @@ export function packageNaturalWins(before: GameState, after: GameState): GameSta
   if (before === after || before.phase !== 'playing' || after.result?.type !== 'win') return after;
   const result = after.result;
   const evaluations = new Map<number, HuEvaluation>();
+  const packageKinds = new Map<number, 'three-mouth' | 'three-pure' | 'global'>();
   let newPackages = 0;
   const events: PendingScoringEvent[] = after.pendingScoringEvents.map((event) => {
     if (event.type !== 'hu-resolved' || event.threeMouthResolution) return event;
@@ -116,8 +117,13 @@ export function packageNaturalWins(before: GameState, after: GameState): GameSta
           !(global && p === 'all-pungs') &&
           !(forcePure && p === 'mixed-one-suit')),
     );
-    const evaluation = { ...event.evaluation, patterns };
+    const baseEvaluation = { ...event.evaluation, patterns };
+    const evaluation =
+      before.ruleSetId === 'nanjing-open-duo'
+        ? withSelfDrawFlowers(baseEvaluation)
+        : baseEvaluation;
     evaluations.set(event.winnerPlayerIndex, evaluation);
+    packageKinds.set(event.winnerPlayerIndex, packageKind);
     // A gang package may already have marked this self-draw. Higher-priority replacement counts once.
     if (!(event.source === 'self-draw' && before.gangPackage.status === 'active')) newPackages++;
     const transfers = getRuleSet(before.ruleSetId)
@@ -125,7 +131,7 @@ export function packageNaturalWins(before: GameState, after: GameState): GameSta
         source: 'self-draw',
         drawSource: 'wall-head',
         winnerPlayerIndex: event.winnerPlayerIndex,
-        playerCount: 4,
+        playerCount: before.players.length,
         evaluation,
       })
       .map((t) => ({ ...t, fromPlayerIndex: payer! }));
@@ -145,6 +151,10 @@ export function packageNaturalWins(before: GameState, after: GameState): GameSta
             ...result,
             winner: {
               ...result.winner,
+              ...(before.ruleSetId === 'nanjing-open-duo' &&
+              packageKinds.has(result.winner.playerIndex)
+                ? { packageKind: packageKinds.get(result.winner.playerIndex)! }
+                : {}),
               evaluation: evaluations.get(result.winner.playerIndex) ?? result.winner.evaluation,
             },
           }
@@ -152,6 +162,9 @@ export function packageNaturalWins(before: GameState, after: GameState): GameSta
             ...result,
             winners: result.winners.map((w) => ({
               ...w,
+              ...(before.ruleSetId === 'nanjing-open-duo' && packageKinds.has(w.playerIndex)
+                ? { packageKind: packageKinds.get(w.playerIndex)! }
+                : {}),
               evaluation: evaluations.get(w.playerIndex) ?? w.evaluation,
             })),
           },
@@ -265,12 +278,16 @@ export function forceFourthMeld(before: GameState, after: GameState): GameState 
     if (exposed) softFlowerItems.push({ kind: 'exposed-kong', count: exposed });
     if (concealed) softFlowerItems.push({ kind: 'concealed-kong', count: concealed });
     if (windsCount) softFlowerItems.push({ kind: 'wind-triplet', count: windsCount });
-    const evaluation = {
+    const baseEvaluation = {
       patterns: normalized,
       hardFlowerCount: player.flowers.length,
       softFlowerCount: softFlowerItems.reduce((sum, item) => sum + item.count, 0),
       softFlowerItems,
     };
+    const evaluation =
+      before.ruleSetId === 'nanjing-open-duo'
+        ? withSelfDrawFlowers(baseEvaluation)
+        : baseEvaluation;
     const payer = mouth ?? meld.fromPlayerIndex;
     if (payer === undefined) return before;
     const result: PackageHandResult = {
@@ -294,7 +311,7 @@ export function forceFourthMeld(before: GameState, after: GameState): GameState 
         {
           type: 'package-resolved',
           result,
-          transfers: forcedPackageTransfers(evaluation, index, payer),
+          transfers: forcedPackageTransfers(evaluation, index, payer, before.players.length),
           status: 'pending',
         },
       ],
