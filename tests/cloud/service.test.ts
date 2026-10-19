@@ -1,11 +1,21 @@
-import { advance, apply, reviewToken } from '../../apps/server/src/table';
+import { advance, apply, appendTableEvents, reviewToken } from '../../apps/server/src/table';
 import { threeMouthRoom } from '../../apps/server/test/three-mouth-fixture';
+import {
+  buGangRoom,
+  eventRoom,
+  eventTile,
+  ordinary,
+  setEventHand,
+  specialRuleRoom,
+  anGangRoom,
+} from '../../apps/server/test/event-fixture';
 import { CloudStore } from '../../cloud/store';
+import * as core from '@nanjing-mahjong/game-core';
 import type { CloudRoom } from '../../cloud/store';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import worker from '../../cloud/worker';
 import type { Env } from '../../cloud/worker';
 import type { RoomView, CommandAck } from '@nanjing-mahjong/shared-types';
@@ -13,6 +23,7 @@ import type { RoomView, CommandAck } from '@nanjing-mahjong/shared-types';
 // SQLite-backed D1 contract, including transactional batches and optimistic update counts.
 class SqlD1 {
   calls = 0;
+  versionConflicts = 0;
   readonly db = new DatabaseSync(':memory:');
   constructor() {
     for (const filename of readdirSync('drizzle')
@@ -32,6 +43,15 @@ class SqlD1 {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const rows = statements.map((s) => s.execute());
+      if (
+        statements.some(
+          (statement, index) =>
+            statement.sql.startsWith('UPDATE cloud_rooms SET body=') &&
+            statement.sql.includes('AND version=?') &&
+            rows[index]!.meta.changes === 0,
+        )
+      )
+        this.versionConflicts++;
       this.db.exec('COMMIT');
       return rows;
     } catch (error) {
@@ -160,6 +180,575 @@ async function table(env: Env) {
   return { clients, roomId };
 }
 describe('Sites D1 room service', () => {
+  it('sends public kong faces without entity IDs in command, replay, poll, connect and live NDJSON', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    stored.match = anGangRoom().match;
+    stored.tableEvents = [];
+    const firstId = stored.nextTableEventId;
+    const firstSequence = stored.nextTableEventSequence;
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const gangIds = [1, 2, 3, 4].map((copy) => `wan-1-${copy}`);
+    const assertPublic = (raw: string) => {
+      const { state } = JSON.parse(raw) as { state: RoomView };
+      for (const id of gangIds) expect(raw).not.toContain(id);
+      expect(state.players[0]!.melds[0]).toEqual({
+        kind: 'an-gang',
+        tiles: Array.from({ length: 4 }, () => ({ family: 'wan', label: '1万' })),
+      });
+      expect(state.tableEvents.find((event) => event.type === 'an-gang')).toEqual({
+        type: 'an-gang',
+        hand: 1,
+        seat: 0,
+        id: firstId,
+        sequence: firstSequence,
+        tile: { family: 'wan', label: '1万' },
+      });
+      expect(JSON.stringify(state.scores)).not.toMatch(/"id"\s*:/);
+      return state;
+    };
+    const streams = await Promise.all(
+      clients.map(async (c) => {
+        const response = await call(env, '/api/stream', c);
+        expect(response.headers.get('Content-Type')).toContain('application/x-ndjson');
+        const reader = response.body!.getReader();
+        await reader.read(); // The pre-kong state may legitimately contain the owner's hand IDs.
+        return reader;
+      }),
+    );
+    try {
+      const initial = (await (await call(env, '/api/poll', clients[0]!)).json()) as {
+        state: RoomView;
+      };
+      const args = {
+        roomId,
+        token: initial.state.actions.choices.find((choice) => choice.kind === 'an-gang')!.token,
+      };
+      const id = crypto.randomUUID();
+      const response = await call(env, '/api/command', clients[0]!, {
+        event: 'game:action',
+        command: { commandId: id, ...args },
+      });
+      expect(response.status).toBe(200);
+      const acceptedRaw = await response.text();
+      assertPublic(acceptedRaw);
+      const accepted = JSON.parse(acceptedRaw) as { ack: CommandAck };
+      expect(accepted.ack.ok).toBe(true);
+      const replay = await command(env, clients[0]!, 'game:action', args, id);
+      expect(replay.body.ack).toEqual(accepted.ack);
+      assertPublic(JSON.stringify(replay.body));
+      for (const reader of streams) {
+        let found = false;
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const chunk = new TextDecoder().decode((await reader.read()).value);
+          for (const line of chunk.trim().split('\n')) {
+            const reply = JSON.parse(line) as { state?: RoomView };
+            if (reply.state?.tableEvents.some((event) => event.type === 'an-gang')) {
+              assertPublic(line);
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        expect(found).toBe(true);
+      }
+      for (const c of clients) {
+        for (const path of ['/api/poll', '/api/connect', '/api/stream']) {
+          const reply = await call(env, path, c);
+          if (path === '/api/stream') {
+            const reader = reply.body!.getReader();
+            try {
+              assertPublic(new TextDecoder().decode((await reader.read()).value));
+            } finally {
+              await reader.cancel();
+            }
+          } else assertPublic(await reply.text());
+        }
+        const joined = await command(env, c, 'room:join', { roomId });
+        expect(joined.body.ack.ok).toBe(true);
+        assertPublic(JSON.stringify(joined.body));
+      }
+      const saved = (await new CloudStore(env.DB).room(roomId))!.room;
+      expect(saved.match!.currentHand.players[0]!.melds[0]!.tiles.map((tile) => tile.id)).toEqual(
+        gangIds,
+      );
+      expect(saved.tableEvents.filter((event) => event.type === 'an-gang')).toHaveLength(1);
+      expect(saved.match!.cumulativeScores).toEqual([1030, 990, 990, 990]);
+    } finally {
+      await Promise.all(streams.map((reader) => reader.cancel()));
+    }
+  });
+
+  it('projects saved winning snapshots without IDs for hand, final match and reconnect responses', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    stored.match = anGangRoom().match;
+    stored.tableEvents = [];
+    apply(stored, {
+      type: 'DECLARE_AN_GANG',
+      playerIndex: 0,
+      tileFace: { category: 'number', suit: 'wan', rank: 1 },
+    });
+    apply(stored, { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 0 });
+    advance(stored);
+    const originalScores = JSON.stringify(stored.scores);
+    expect(originalScores).toContain('wan-1-1');
+    const expected = JSON.parse(originalScores, (key, value) => (key === 'id' ? undefined : value));
+    for (const status of ['playing', 'completed', 'ended'] as const) {
+      stored.status = status;
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+      for (const c of clients) {
+        const response = await call(env, '/api/connect', c);
+        const raw = await response.text();
+        const { state } = JSON.parse(raw) as { state: RoomView };
+        expect(state.scores).toEqual(expected);
+        expect(JSON.stringify(state.scores)).not.toMatch(/"id"\s*:/);
+        expect(raw).not.toContain('wan-1-');
+        const stream = (await call(env, '/api/stream', c)).body!.getReader();
+        try {
+          const frame = new TextDecoder().decode((await stream.read()).value);
+          expect(JSON.parse(frame).state.scores).toEqual(expected);
+          expect(frame).not.toContain('wan-1-');
+        } finally {
+          await stream.cancel();
+        }
+      }
+      expect(JSON.stringify((await new CloudStore(env.DB).room(roomId))!.room.scores)).toBe(
+        originalScores,
+      );
+    }
+  });
+
+  it.each(['flower-kong', 'four-winds-gathered', 'follow-discard'] as const)(
+    'atomically commits %s confirmation once across failed receipts, racing retries and recovery',
+    async (rule) => {
+      const { env, db } = setup();
+      const { clients, roomId } = await table(env);
+      const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+      stored.match = specialRuleRoom(rule).match;
+      stored.tableEvents = [];
+      stored.nextTableEventId = 101;
+      stored.nextTableEventSequence = 201;
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+      const getState = async (seat: number) =>
+        ((await (await call(env, '/api/poll', clients[seat]!)).json()) as { state: RoomView })
+          .state;
+      const token = (await getState(0)).actions.choices.find(
+        (choice) => choice.kind === 'discard',
+      )!.token;
+      const args = { roomId, token };
+      const id = crypto.randomUUID();
+      const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      db.db.exec(
+        "CREATE TRIGGER fail_special_receipt BEFORE INSERT ON cloud_commands BEGIN SELECT RAISE(ABORT,'failure'); END;",
+      );
+      expect((await command(env, clients[0]!, 'game:action', args, id)).response.status).toBe(503);
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+      expect(db.db.prepare('SELECT * FROM cloud_commands WHERE id=?').get(id)).toBeUndefined();
+      db.db.exec('DROP TRIGGER fail_special_receipt');
+      const replies = await Promise.all([
+        command(env, clients[0]!, 'game:action', args, id),
+        command(env, clients[0]!, 'game:action', args, id),
+      ]);
+      expect(replies[0]!.body.ack.ok).toBe(true);
+      expect(replies[1]!.body.ack).toEqual(replies[0]!.body.ack);
+      expect(db.versionConflicts).toBeGreaterThan(0);
+      const saved = (await new CloudStore(env.DB).room(roomId))!.room;
+      const facts = saved.tableEvents.filter((event) => event.type === 'special-rule-confirmed');
+      expect(facts).toEqual([
+        expect.objectContaining({
+          rule,
+          seat: rule === 'flower-kong' ? 1 : rule === 'follow-discard' ? 1 : 0,
+        }),
+      ]);
+      expect(replies[0]!.body.state!.tableEvents).toEqual(saved.tableEvents);
+      expect(saved.tableEvents.map(({ id, sequence }) => [id, sequence])).toEqual(
+        saved.tableEvents.map((_, index) => [101 + index, 201 + index]),
+      );
+      expect(saved.nextTableEventId).toBe(101 + saved.tableEvents.length);
+      expect(saved.nextTableEventSequence).toBe(201 + saved.tableEvents.length);
+      expect(facts[0]!.sequence).toBeLessThan(
+        saved.tableEvents.find((event) => event.type === 'score-changed')!.sequence,
+      );
+      const committed = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      clients[1]!.peer = crypto.randomUUID();
+      expect((await call(env, '/api/connect', clients[1]!)).status).toBe(200);
+      for (const seat of [0, 1, 2, 3]) {
+        const state = await getState(seat);
+        expect(state.tableEvents).toEqual(saved.tableEvents);
+        expect(JSON.stringify(state.tableEvents)).not.toContain(token);
+        expect(JSON.stringify(state.tableEvents)).not.toContain('wan-9-4');
+      }
+      expect((await command(env, clients[0]!, 'game:action', args, id)).body.ack).toEqual(
+        replies[0]!.body.ack,
+      );
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(committed);
+    },
+  );
+
+  it('persists a two-to-three mouth upgrade once through failed writes and racing command retries', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const getState = async (seat: number) =>
+      ((await (await call(env, '/api/poll', clients[seat]!)).json()) as { state: RoomView }).state;
+    let stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    stored.match = eventRoom().match;
+    stored.tableEvents = [];
+    const game = stored.match!.currentHand;
+    game.threeMouthState = [
+      game.threeMouthState[0],
+      { status: 'tracking', mouthCount: 1, lockedPayerPlayerIndex: 0 },
+      game.threeMouthState[2],
+      game.threeMouthState[3],
+    ];
+    for (const rank of [1, 2]) {
+      // Legal stage fixture for the next claim; carry forward the real first lock and meld.
+      const hand = stored.match!.currentHand;
+      hand.currentPlayerIndex = 0;
+      hand.turnStage = 'waiting-for-discard';
+      hand.pendingAction = { type: 'discard', playerIndex: 0, seat: 'east' };
+      hand.wall = ['tong-9-3', 'tong-9-4'].map(ordinary);
+      setEventHand(stored, 0, [ordinary(`wan-${rank}-1`)]);
+      setEventHand(
+        stored,
+        1,
+        [2, 3].map((copy) => ordinary(`wan-${rank}-${copy}`)),
+      );
+      setEventHand(stored, 2, [ordinary('tong-5-1'), ordinary('tong-5-2')]);
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+      const discard = (await getState(0)).actions.choices.find(
+        (choice) => choice.kind === 'discard',
+      )!;
+      expect(
+        (await command(env, clients[0]!, 'game:action', { roomId, token: discard.token })).body.ack
+          .ok,
+      ).toBe(true);
+      const peng = (await getState(1)).actions.choices.find((choice) => choice.kind === 'peng')!;
+      expect(
+        (await getState(1)).tableEvents.filter((event) => event.type === 'mouth-locked'),
+      ).toHaveLength(rank - 1);
+      const args = { roomId, token: peng.token };
+      const id = crypto.randomUUID();
+      const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      db.db.exec(
+        "CREATE TRIGGER fail_lock_receipt BEFORE INSERT ON cloud_commands BEGIN SELECT RAISE(ABORT,'failure'); END;",
+      );
+      expect((await command(env, clients[1]!, 'game:action', args, id)).response.status).toBe(503);
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+      expect(db.db.prepare('SELECT * FROM cloud_commands WHERE id=?').get(id)).toBeUndefined();
+      db.db.exec('DROP TRIGGER fail_lock_receipt');
+      const [accepted, retried] = await Promise.all([
+        command(env, clients[1]!, 'game:action', args, id),
+        command(env, clients[1]!, 'game:action', args, id),
+      ]);
+      expect(accepted.body.ack.ok).toBe(true);
+      expect(retried.body.ack).toEqual(accepted.body.ack);
+      expect((await command(env, clients[1]!, 'game:action', args, id)).body.ack).toEqual(
+        accepted.body.ack,
+      );
+      stored = (await new CloudStore(env.DB).room(roomId))!.room;
+      expect(
+        stored.tableEvents
+          .filter((event) => event.type === 'mouth-locked')
+          .map((event) => [event.seat, event.fromSeat, event.mouths]),
+      ).toEqual(
+        rank === 1
+          ? [[1, 0, 2]]
+          : [
+              [1, 0, 2],
+              [1, 0, 3],
+            ],
+      );
+    }
+    for (const seat of [0, 1, 2, 3])
+      expect((await getState(seat)).tableEvents).toEqual(stored.tableEvents);
+    expect(db.versionConflicts).toBeGreaterThan(0);
+    expect((await new CloudStore(env.DB).room(roomId))!.room.tableEvents).toEqual(
+      stored.tableEvents,
+    );
+  });
+  it.each(['self-draw', 'draw'] as const)(
+    'persists a %s result and one completed settlement',
+    async (result) => {
+      const { env, db } = setup();
+      const { clients, roomId } = await table(env);
+      const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+      stored.match = eventRoom({ wall: [] }).match;
+      const game = stored.match!.currentHand;
+      setEventHand(
+        stored,
+        0,
+        result === 'draw'
+          ? [ordinary('wan-1-1')]
+          : [
+              'wan-1-1',
+              'wan-2-1',
+              'wan-3-1',
+              'wan-4-1',
+              'wan-5-1',
+              'wan-6-1',
+              'tiao-1-1',
+              'tiao-2-1',
+              'tiao-3-1',
+              'tong-1-1',
+              'tong-2-1',
+              'tong-3-1',
+              'wind-east-1',
+              'wind-east-2',
+            ].map(ordinary),
+      );
+      if (result === 'self-draw')
+        game.selfDrawProvenance = { source: 'wall-head', playerIndex: 0, tileId: 'wind-east-2' };
+      const firstId = stored.nextTableEventId;
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+      const state = (
+        (await (await call(env, '/api/poll', clients[0]!)).json()) as { state: RoomView }
+      ).state;
+      const kind = result === 'draw' ? 'discard' : 'hu';
+      const args = {
+        roomId,
+        token: state.actions.choices.find((choice) => choice.kind === kind)!.token,
+      };
+      const id = crypto.randomUUID();
+      const reply = await command(env, clients[0]!, 'game:action', args, id);
+      expect(reply.body.ack.ok).toBe(true);
+      const saved = (await new CloudStore(env.DB).room(roomId))!.room;
+      expect(
+        saved.tableEvents.filter((event) => event.id >= firstId).map((event) => event.type),
+      ).toEqual(
+        result === 'draw'
+          ? ['tile-discarded', 'draw', 'hand-settled']
+          : ['hu', 'score-changed', 'hand-settled'],
+      );
+      expect(saved.match!.currentHandStatus).toBe('completed');
+      expect((await command(env, clients[0]!, 'game:action', args, id)).body.ack).toEqual(
+        reply.body.ack,
+      );
+      expect((await new CloudStore(env.DB).room(roomId))!.room.tableEvents).toEqual(
+        saved.tableEvents,
+      );
+    },
+  );
+  it('commits concurrent multi-hu responses with one final settlement and stable events after reconnect', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    stored.match = buGangRoom().match;
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const getState = async (seat: number) =>
+      ((await (await call(env, '/api/poll', clients[seat]!)).json()) as { state: RoomView }).state;
+    const token = (await getState(0)).actions.choices.find(
+      (choice) => choice.kind === 'discard',
+    )!.token;
+    expect((await command(env, clients[0]!, 'game:action', { roomId, token })).body.ack.ok).toBe(
+      true,
+    );
+    const requests = await Promise.all(
+      [1, 2, 3].map(async (seat) => ({
+        seat,
+        id: crypto.randomUUID(),
+        args: {
+          roomId,
+          token: (await getState(seat)).actions.choices.find((choice) => choice.kind === 'hu')!
+            .token,
+        },
+      })),
+    );
+    const replies = await Promise.all(
+      requests.map(({ seat, args, id }) => command(env, clients[seat]!, 'game:action', args, id)),
+    );
+    expect(replies.every((reply) => reply.body.ack.ok)).toBe(true);
+    expect(db.versionConflicts).toBeGreaterThan(0);
+    const saved = (await new CloudStore(env.DB).room(roomId))!.room;
+    expect(saved.match!.currentHandStatus).toBe('completed');
+    expect(
+      saved.tableEvents.filter((event) => event.type === 'hu').map((event) => event.winnerSeats),
+    ).toEqual([[1], [2], [3]]);
+    const settlements = saved.tableEvents.filter((event) => event.type === 'hand-settled');
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]!.winnerSeats).toEqual([1, 2, 3]);
+    expect(settlements[0]!.changes).toEqual(
+      saved.match!.cumulativeScores.map((score, seat) => ({ seat, delta: score - 1000 })),
+    );
+    for (const { seat, args, id } of requests)
+      expect((await command(env, clients[seat]!, 'game:action', args, id)).body.ack.ok).toBe(true);
+    clients[1]!.peer = crypto.randomUUID();
+    expect((await call(env, '/api/connect', clients[1]!)).status).toBe(200);
+    for (const seat of [0, 1, 2, 3])
+      expect((await getState(seat)).tableEvents).toEqual(saved.tableEvents);
+    const restored = (await new CloudStore(env.DB).room(roomId))!.room;
+    expect(restored.tableEvents).toEqual(saved.tableEvents);
+    expect([restored.nextTableEventId, restored.nextTableEventSequence]).toEqual([
+      saved.nextTableEventId,
+      saved.nextTableEventSequence,
+    ]);
+    expect(restored.scores).toEqual(saved.scores);
+  });
+
+  it('does not commit game state or reset scores when event generation fails', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    stored.match = specialRuleRoom('four-winds-gathered').match;
+    stored.scores = [{ hand: 1, reason: '历史记录', transfers: [{ from: 1, to: 0, amount: 10 }] }];
+    stored.nextTableEventId = Number.MAX_SAFE_INTEGER - 1;
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const state = (
+      (await (await call(env, '/api/poll', clients[0]!)).json()) as { state: RoomView }
+    ).state;
+    const token = state.actions.choices.find((choice) => choice.kind === 'discard')!.token;
+    const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+    const receipts = db.db.prepare('SELECT * FROM cloud_commands ORDER BY session,id').all();
+    expect(
+      (await command(env, clients[0]!, 'game:action', { roomId, token })).response.status,
+    ).toBe(503);
+    expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+    expect(db.db.prepare('SELECT * FROM cloud_commands ORDER BY session,id').all()).toEqual(
+      receipts,
+    );
+  });
+  it('does not publish or save an already generated confirmation when scoring fails', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = (await new CloudStore(env.DB).room(roomId))!.room;
+    stored.match = specialRuleRoom('four-winds-gathered').match;
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const state = (
+      (await (await call(env, '/api/poll', clients[0]!)).json()) as { state: RoomView }
+    ).state;
+    const token = state.actions.choices.find((choice) => choice.kind === 'discard')!.token;
+    const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+    const id = crypto.randomUUID();
+    const settle = vi.spyOn(core, 'settlePendingScoringEvents').mockImplementationOnce(() => {
+      throw new Error('simulated scoring failure');
+    });
+    try {
+      const failed = await command(env, clients[0]!, 'game:action', { roomId, token }, id);
+      expect(failed.response.status).toBe(503);
+      expect(failed.body.state).toBeUndefined();
+      expect(settle).toHaveBeenCalledOnce();
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+      expect(db.db.prepare('SELECT * FROM cloud_commands WHERE id=?').get(id)).toBeUndefined();
+    } finally {
+      settle.mockRestore();
+    }
+  });
+  it.each([false, true])(
+    'persists bu-gang resolution without premature success (robbed=%s)',
+    async (robbed) => {
+      const { env, db } = setup();
+      const { clients, roomId } = await table(env);
+      const stored = JSON.parse(
+        String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+      ) as CloudRoom;
+      stored.match = buGangRoom().match;
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+      const initialEvents = structuredClone(stored.tableEvents);
+      const getState = async (seat: number) =>
+        ((await (await call(env, '/api/poll', clients[seat]!)).json()) as { state: RoomView })
+          .state;
+      const declare = (await getState(0)).actions.choices.find(
+        (choice) => choice.kind === 'bu-gang',
+      )!;
+      const declared = await command(env, clients[0]!, 'game:action', {
+        roomId,
+        token: declare.token,
+      });
+      expect(declared.body.ack.ok).toBe(true);
+      expect(declared.body.state!.tableEvents).toEqual(initialEvents);
+      expect(declared.body.state!.responseWindow).toEqual({ source: 'bu-gang', actorSeat: 0 });
+      for (const seat of [1, 2, 3]) {
+        const state = await getState(seat);
+        const kind = robbed && seat === 1 ? 'hu' : 'pass';
+        const token = state.actions.choices.find((choice) => choice.kind === kind)!.token;
+        const args = { roomId, token };
+        const id = crypto.randomUUID();
+        const accepted = await command(env, clients[seat]!, 'game:action', args, id);
+        expect(accepted.body.ack.ok).toBe(true);
+        if (seat < 3) {
+          expect(accepted.body.state!.tableEvents).toEqual(initialEvents);
+          expect(accepted.body.state!.responseWindow).toEqual({ source: 'bu-gang', actorSeat: 0 });
+        } else expect(accepted.body.state!.responseWindow).toBeUndefined();
+        expect((await command(env, clients[seat]!, 'game:action', args, id)).body.ack).toEqual(
+          accepted.body.ack,
+        );
+      }
+      const saved = (await new CloudStore(env.DB).room(roomId))!.room;
+      expect(saved.tableEvents.filter((event) => event.type === 'bu-gang')).toHaveLength(
+        robbed ? 0 : 1,
+      );
+      expect(saved.match!.currentHand.players[0]!.melds[0]!.type).toBe(robbed ? 'peng' : 'bu-gang');
+      for (const seat of [0, 1, 2, 3])
+        expect((await getState(seat)).tableEvents).toEqual(saved.tableEvents);
+    },
+  );
+  it('atomically persists real discard and flower events, then replays a lost acknowledgement', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const row = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)!;
+    const stored = JSON.parse(String(row.body)) as CloudRoom;
+    expect(stored.tableEvents.filter((event) => event.type === 'hand-started')).toHaveLength(1);
+    stored.match = eventRoom({
+      wall: ['flower-plum-1', 'wan-9-1', 'flower-orchid-1'].map(eventTile),
+    }).match;
+    setEventHand(stored, 0, [ordinary('wan-1-1')]);
+    const firstId = stored.nextTableEventId;
+    const firstSequence = stored.nextTableEventSequence;
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const state = (
+      (await (await call(env, '/api/poll', clients[0]!)).json()) as { state: RoomView }
+    ).state;
+    const args = {
+      roomId,
+      token: state.actions.choices.find((choice) => choice.kind === 'discard')!.token,
+    };
+    const commandId = crypto.randomUUID();
+    db.db.exec(
+      "CREATE TRIGGER fail_event_receipt BEFORE INSERT ON cloud_commands BEGIN SELECT RAISE(ABORT,'simulated failure'); END;",
+    );
+    const before = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+    expect((await command(env, clients[0]!, 'game:action', args, commandId)).response.status).toBe(
+      503,
+    );
+    expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+    expect(db.db.prepare('SELECT * FROM cloud_commands WHERE id=?').get(commandId)).toBeUndefined();
+    db.db.exec('DROP TRIGGER fail_event_receipt');
+    const accepted = await command(env, clients[0]!, 'game:action', args, commandId);
+    expect(accepted.body.ack.ok).toBe(true);
+    const committed = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)!;
+    const saved = JSON.parse(String(committed.body)) as CloudRoom;
+    const events = saved.tableEvents.filter((event) => event.id >= firstId);
+    expect(events.map((event) => event.type)).toEqual([
+      'tile-discarded',
+      'tile-drawn',
+      'flower-replaced',
+      'tile-drawn',
+      'flower-replaced',
+      'tile-drawn',
+    ]);
+    expect(events.map((event) => [event.id, event.sequence])).toEqual(
+      events.map((_, index) => [firstId + index, firstSequence + index]),
+    );
+    expect(saved.match!.currentHand.players[1]!.hand.map((tile) => tile.id)).toEqual(['wan-9-1']);
+    expect(saved.nextTableEventId).toBe(firstId + events.length);
+    expect(db.db.prepare('SELECT * FROM cloud_commands WHERE id=?').get(commandId)).toBeDefined();
+    // Ignore the first response, as if it timed out after the transaction committed.
+    expect((await command(env, clients[0]!, 'game:action', args, commandId)).body.ack).toEqual(
+      accepted.body.ack,
+    );
+    expect((await command(env, clients[0]!, 'game:action', args)).body.ack.ok).toBe(false);
+    for (const client of clients) {
+      const visible = ((await (await call(env, '/api/poll', client)).json()) as { state: RoomView })
+        .state;
+      expect(visible.tableEvents).toEqual(saved.tableEvents);
+      expect(JSON.stringify(visible.tableEvents)).not.toContain('wan-9-1');
+      expect(JSON.stringify(visible.tableEvents)).not.toContain(args.token);
+    }
+    expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(committed);
+  });
   it('restores a special hu opportunity after reconnect and does not settle a replay twice', async () => {
     const { env, db } = setup();
     const { clients, roomId } = await table(env);
@@ -218,8 +807,75 @@ describe('Sites D1 room service', () => {
       expect((await command(env, c, 'room:ready', { roomId, ready: true })).body.ack.ok).toBe(true);
     expect((await command(env, clients[0]!, 'room:start', { roomId })).body.ack.ok).toBe(true);
     const next = (await store.room(roomId))!.room;
-    expect(next.rules).toBe('V1.0.10');
+    expect(next.rules).toBe('V1.0.11');
     expect(next.match!.currentHand.legacyThreeMouth).toBeUndefined();
+  });
+  it.each(['V1.0.9', 'V1.0.10'] as const)(
+    'all D1 read paths upgrade %s metadata without changing match or history',
+    async (version) => {
+      const { env, db } = setup();
+      const { clients, roomId } = await table(env);
+      const raw = JSON.parse(
+        String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+      ) as CloudRoom;
+      raw.rules = version;
+      db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(raw), roomId);
+      const store = new CloudStore(env.DB);
+      const session = clients[0]!.cookie.split('=')[1]!;
+      const direct = await store.room(roomId);
+      const polled = await store.poll(session, clients[0]!.peer);
+      const context = await store.context(session, clients[0]!.peer);
+      for (const loaded of [direct, polled.loaded, context.loaded]) {
+        expect(loaded!.room).toEqual({ ...raw, rules: 'V1.0.11' });
+      }
+    },
+  );
+  it('persists artificial public events and clears only their history on rematch', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const stored = JSON.parse(
+      String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
+    ) as CloudRoom;
+    appendTableEvents(stored, [
+      { type: 'tile-drawn', hand: 1, seat: 0 },
+      {
+        type: 'tile-discarded',
+        hand: 1,
+        seat: 0,
+        tile: { family: 'wan', label: '1万' },
+      },
+    ]);
+    db.db.prepare('UPDATE cloud_rooms SET body=? WHERE id=?').run(JSON.stringify(stored), roomId);
+    const restored = (await new CloudStore(env.DB).room(roomId))!.room;
+    expect(restored.tableEvents).toEqual(stored.tableEvents);
+    const counters = [stored.nextTableEventId, stored.nextTableEventSequence];
+    expect([restored.nextTableEventId, restored.nextTableEventSequence]).toEqual(counters);
+    const views = await Promise.all(
+      clients.map(
+        async (c) =>
+          ((await (await call(env, '/api/poll', c)).json()) as { state: RoomView }).state,
+      ),
+    );
+    expect(views.map(({ tableEvents }) => tableEvents)).toEqual(
+      Array.from({ length: 4 }, () => stored.tableEvents),
+    );
+    expect((await command(env, clients[0]!, 'room:end', { roomId })).body.ack.ok).toBe(true);
+    expect((await command(env, clients[0]!, 'room:rematch', { roomId })).body.ack.ok).toBe(true);
+    const rematch = (await new CloudStore(env.DB).room(roomId))!.room;
+    expect(rematch.tableEvents).toEqual([]);
+    expect([rematch.nextTableEventId, rematch.nextTableEventSequence]).toEqual(counters);
+    for (const client of clients)
+      expect((await command(env, client, 'room:ready', { roomId, ready: true })).body.ack.ok).toBe(
+        true,
+      );
+    expect((await command(env, clients[0]!, 'room:start', { roomId })).body.ack.ok).toBe(true);
+    const restarted = (await new CloudStore(env.DB).room(roomId))!.room;
+    expect(restarted.tableEvents[0]).toMatchObject({
+      type: 'hand-started',
+      id: counters[0],
+      sequence: counters[1],
+      hand: 1,
+    });
   });
   it('joins four concurrent players, isolates hands, rejects extra and forged commands', async () => {
     const { env } = setup();
@@ -327,10 +983,89 @@ describe('Sites D1 room service', () => {
     db.db.exec(
       "CREATE TRIGGER fail_receipt BEFORE INSERT ON cloud_commands BEGIN SELECT RAISE(ABORT,'simulated failure'); END;",
     );
-    expect((await command(env, c, 'room:ready', { roomId, ready: true })).response.status).toBe(
-      503,
-    );
+    const rejected = await command(env, c, 'room:ready', { roomId, ready: true });
+    expect(rejected.response.status).toBe(503);
+    expect(rejected.body).toEqual({
+      error: { code: 'UNAVAILABLE', message: '服务暂时不可用，请稍后重试' },
+    });
     expect(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(before);
+  });
+  it.each(['missing', 'corrupt', 'unsupported'] as const)(
+    'reports a %s event archive without rewriting room state, version, or receipts',
+    async (kind) => {
+      const { env, db } = setup();
+      const { clients, roomId } = await table(env);
+      const c = clients[0]!;
+      const row = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)!;
+      const corrupt = JSON.parse(String(row.body)) as CloudRoom;
+      corrupt.scores.push({
+        hand: 1,
+        reason: '既有计分',
+        transfers: [{ from: 0, to: 1, amount: 10 }],
+      });
+      appendTableEvents(corrupt, [{ type: 'tile-drawn', hand: 1, seat: 0 }]);
+      if (kind === 'missing') delete (corrupt as Partial<CloudRoom>).nextTableEventSequence;
+      else if (kind === 'corrupt') corrupt.nextTableEventSequence = 0;
+      else Object.assign(corrupt, { tableEventSchemaVersion: 3 });
+      db.db
+        .prepare('UPDATE cloud_rooms SET body=? WHERE id=?')
+        .run(JSON.stringify(corrupt), roomId);
+      const beforeRoom = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      const beforeReceipts = db.db
+        .prepare('SELECT * FROM cloud_commands ORDER BY session,id')
+        .all();
+      for (const path of ['/api/command', '/api/connect', '/api/poll', '/api/stream']) {
+        const rejected = await call(env, path, c, {
+          event: 'room:end',
+          command: { commandId: crypto.randomUUID(), roomId },
+        });
+        expect(rejected.status).toBe(503);
+        expect(await rejected.json()).toEqual({
+          error: {
+            code: 'ROOM_EVENT_ARCHIVE_INCOMPATIBLE',
+            message: '牌桌事件历史存档不兼容或已损坏，房间暂不可用，请联系管理员核查并修复存档。',
+          },
+        });
+        expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(
+          beforeRoom,
+        );
+        expect(db.db.prepare('SELECT * FROM cloud_commands ORDER BY session,id').all()).toEqual(
+          beforeReceipts,
+        );
+      }
+    },
+  );
+
+  it('reports archive damage after a stream opens and closes without modifying the archive', async () => {
+    const { env, db } = setup();
+    const { clients, roomId } = await table(env);
+    const response = await call(env, '/api/stream', clients[0]!);
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const next = async () => JSON.parse(new TextDecoder().decode((await reader.read()).value));
+    try {
+      expect((await next()).state.id).toBe(roomId);
+      db.db
+        .prepare("UPDATE cloud_rooms SET body=json_remove(body,'$.tableEvents') WHERE id=?")
+        .run(roomId);
+      const beforeRoom = db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId);
+      const beforeReceipts = db.db
+        .prepare('SELECT * FROM cloud_commands ORDER BY session,id')
+        .all();
+      expect(await next()).toEqual({
+        error: {
+          code: 'ROOM_EVENT_ARCHIVE_INCOMPATIBLE',
+          message: '牌桌事件历史存档不兼容或已损坏，房间暂不可用，请联系管理员核查并修复存档。',
+        },
+      });
+      expect((await reader.read()).done).toBe(true);
+      expect(db.db.prepare('SELECT * FROM cloud_rooms WHERE id=?').get(roomId)).toEqual(beforeRoom);
+      expect(db.db.prepare('SELECT * FROM cloud_commands ORDER BY session,id').all()).toEqual(
+        beforeReceipts,
+      );
+    } finally {
+      await reader.cancel();
+    }
   });
 });
 
@@ -508,6 +1243,9 @@ it('starts the next hand once after four concurrent confirmations and rejects st
     String(db.db.prepare('SELECT body FROM cloud_rooms WHERE id=?').get(roomId)!.body),
   ) as CloudRoom;
   expect(saved.match!.currentHandIndex).toBe(hand + 1);
+  expect(
+    saved.tableEvents.filter((event) => event.type === 'hand-started' && event.hand === hand + 2),
+  ).toHaveLength(1);
   expect(saved.nextHandReady).toEqual([]);
   expect((await command(env, clients[0]!, 'room:next-ready', { roomId, token })).body.ack.ok).toBe(
     false,

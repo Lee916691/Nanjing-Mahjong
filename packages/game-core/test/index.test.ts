@@ -1717,12 +1717,9 @@ describe('Nanjing Mahjong match state', () => {
   });
 
   it.each([
-    ['a self draw', { selfDrawCount: 1 }],
     ['a follow-discard penalty', { followDiscardPenaltyCount: 1 }],
     ['a four-identical-discards penalty', { fourIdenticalDiscardsPenaltyCount: 1 }],
     ['four winds gathered', { fourWindsGatheredCount: 1 }],
-    ['a successful AnGang', { successfulAnGangCount: 1 }],
-    ['two successful direct MingGang or BuGang declarations', { successfulMingOrBuGangCount: 2 }],
     ['an established flower-kong', { flowerKongCount: 1 }],
   ])('continues the 16th dealer turn after %s', (_name, fact) => {
     const match = startMatch(createMatch());
@@ -1788,23 +1785,41 @@ describe('Nanjing Mahjong match state', () => {
     expect(corrupt).toEqual(before);
   });
 
-  it('does not continue the 16th dealer turn after only one direct MingGang or BuGang', () => {
-    const match = startMatch(createMatch());
-    const final = {
-      ...match,
-      effectiveDealerTurn: 16,
-      isFinalDealerTurn: true,
-      currentHand: {
-        ...match.currentHand,
-        handProgressFacts: {
-          ...match.currentHand.handProgressFacts,
-          successfulMingOrBuGangCount: 1,
+  it.each([
+    ['one successful AnGang', { successfulAnGangCount: 1 }],
+    ['multiple successful AnGangs', { successfulAnGangCount: 3 }],
+    ['one direct MingGang or BuGang', { successfulMingOrBuGangCount: 1 }],
+    ['two direct MingGangs or BuGangs', { successfulMingOrBuGangCount: 2 }],
+    ['more than two direct MingGangs or BuGangs', { successfulMingOrBuGangCount: 3 }],
+    [
+      'all removed continuation facts together',
+      { selfDrawCount: 1, successfulAnGangCount: 1, successfulMingOrBuGangCount: 2 },
+    ],
+  ])(
+    'ends the 16th dealer turn despite %s when no continuation condition remains',
+    (_name, fact) => {
+      const match = startMatch(createMatch());
+      const final = {
+        ...match,
+        effectiveDealerTurn: 16,
+        isFinalDealerTurn: true,
+        currentHand: {
+          ...match.currentHand,
+          handProgressFacts: {
+            ...match.currentHand.handProgressFacts,
+            ...fact,
+          },
         },
-      },
-    };
+      };
 
-    expect(completeCurrentHand(withEndedWin(final, 1, 0)).status).toBe('completed');
-  });
+      const completed = completeCurrentHand(withEndedWin(final, 1, 0));
+      expect(completed.status).toBe('completed');
+      expect(completed.dealerIndex).toBe(1);
+      expect(completed.completedHands[0]?.reason).toBe('normal-dealer-advance');
+      expect(completed.currentHand.handProgressFacts).toEqual(final.currentHand.handProgressFacts);
+      expect(completed.cumulativeScores).toEqual(final.cumulativeScores);
+    },
+  );
 
   it('continues the 16th dealer turn when a winner has a rule-defined big hand', () => {
     const match = withEndedWin(
@@ -1852,7 +1867,7 @@ describe('Nanjing Mahjong match state', () => {
       isFinalDealerTurn: false,
       currentHand: {
         ...match.currentHand,
-        handProgressFacts: { ...match.currentHand.handProgressFacts, successfulAnGangCount: 1 },
+        handProgressFacts: { ...match.currentHand.handProgressFacts, flowerKongCount: 1 },
       },
     };
     const completed = completeCurrentHand(withEndedWin(fifteenth, 1, 0));

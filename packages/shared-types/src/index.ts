@@ -25,12 +25,12 @@ export interface PlayerGameView {
   hand?: TileView[];
   /** Only included in the receiving player's private view. */
   drawnTileId?: string;
-  flowers: TileView[];
-  melds: { kind: string; tiles: TileView[]; claimedTileId?: string; fromSeat?: number }[];
+  flowers: PublicTableTile[];
+  melds: { kind: string; tiles: PublicTableTile[]; claimedTileIndex?: number; fromSeat?: number }[];
   discards: TileView[];
   diHu: boolean;
   score: number;
-  rack?: TileView;
+  rack?: PublicTableTile;
 }
 export interface ScoreLine {
   responsibility?: { trigger: number; payer: number };
@@ -53,6 +53,93 @@ export interface ScoreLine {
   reason: string;
   transfers: { from: number; to: number; amount: number }[];
 }
+export type TableEventType =
+  | 'hand-started'
+  | 'tile-drawn'
+  | 'tile-discarded'
+  | 'flower-replaced'
+  | 'peng'
+  | 'ming-gang'
+  | 'an-gang'
+  | 'bu-gang'
+  | 'hu'
+  | 'draw'
+  | 'score-changed'
+  | 'special-rule-confirmed'
+  | 'mouth-locked'
+  | 'hand-settled';
+export interface PublicTableTile {
+  family: string;
+  label: string;
+}
+/** Display-only score snapshot; internal ScoreLine archives retain entity IDs. */
+export type PublicScoreLine = Omit<ScoreLine, 'winningHand'> & {
+  winningHand?: {
+    concealed: PublicTableTile[];
+    melds: { kind: string; tiles: PublicTableTile[] }[];
+    flowers: PublicTableTile[];
+    winningTile: PublicTableTile;
+  };
+};
+export interface TableScoreChange {
+  seat: number;
+  delta: number;
+}
+interface TableEventBase {
+  id: number;
+  sequence: number;
+  type: TableEventType;
+  hand: number;
+}
+export type TableEvent =
+  | (TableEventBase & {
+      type: 'special-rule-confirmed';
+      rule: 'flower-kong' | 'four-winds-gathered' | 'follow-discard';
+      seat: number;
+    })
+  | (TableEventBase & {
+      type: 'mouth-locked';
+      seat: number;
+      fromSeat: number;
+      mouths: 2 | 3;
+    })
+  | (TableEventBase & { type: 'hand-started'; dealer: number })
+  | (TableEventBase & { type: 'tile-drawn'; seat: number })
+  | (TableEventBase & { type: 'tile-discarded'; seat: number; tile: PublicTableTile })
+  | (TableEventBase & { type: 'flower-replaced'; seat: number; flower: PublicTableTile })
+  | (TableEventBase & {
+      type: 'peng' | 'ming-gang';
+      seat: number;
+      fromSeat: number;
+      tile: PublicTableTile;
+    })
+  | (TableEventBase & { type: 'an-gang'; seat: number; tile: PublicTableTile })
+  | (TableEventBase & {
+      type: 'bu-gang';
+      seat: number;
+      fromSeat: number;
+      tile: PublicTableTile;
+    })
+  | (TableEventBase & {
+      type: 'hu';
+      winnerSeats: number[];
+      fromSeat: number | null;
+      responsibleSeat?: number;
+      summary: string;
+    })
+  | (TableEventBase & { type: 'draw'; summary: string })
+  | (TableEventBase & {
+      type: 'score-changed';
+      changes: TableScoreChange[];
+      reason: string;
+    })
+  | (TableEventBase & {
+      type: 'hand-settled';
+      result: 'hu' | 'draw';
+      winnerSeats: number[];
+      changes: TableScoreChange[];
+      summary: string;
+    });
 export interface RoomView {
   id: string;
   revision: number;
@@ -67,8 +154,11 @@ export interface RoomView {
   current: number | null;
   remaining: number;
   phase: string;
+  /** Public trigger only; never includes responder identities or private choices. */
+  responseWindow?: { source: 'discard' | 'bu-gang'; actorSeat: number };
   actions: AvailableActions;
-  scores: ScoreLine[];
+  scores: PublicScoreLine[];
+  tableEvents: TableEvent[];
   result: string | null;
   nextHandSeconds: number | null;
   nextHandReady?: number[];

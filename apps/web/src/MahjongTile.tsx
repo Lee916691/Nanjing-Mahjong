@@ -1,13 +1,12 @@
-import type { TileView } from '@nanjing-mahjong/shared-types';
+import type { PublicTableTile, TileView } from '@nanjing-mahjong/shared-types';
 import { tileGlyphs } from './assets/tile-glyphs';
 import { bambooGlyphs } from './assets/bamboo-glyphs';
 import { classicGlyphs } from './assets/classic-glyphs';
 
 const ink = { navy: '#294657', jade: '#246a4b', red: '#ad453c' };
-function Face({ tile }: { tile: TileView }) {
-  const parsed = /^(wan|tong|tiao)-([1-9])-/.exec(tile.id);
-  const rank = Number(parsed?.[2] ?? 0);
-  const family = parsed?.[1] ?? tile.family;
+function Face({ tile }: { tile: PublicTableTile }) {
+  const rank = Number(/^([1-9])[万条筒]$/.exec(tile.label)?.[1] ?? 0);
+  const family = tile.family;
   const artwork: Partial<Record<keyof typeof ink, string>> | undefined =
     family === 'tiao' && rank
       ? bambooGlyphs[rank]
@@ -41,8 +40,9 @@ export function MahjongTile({
   onClick,
   onHover,
   disabled = false,
+  feedbackId,
 }: {
-  tile: TileView;
+  tile: PublicTableTile | TileView;
   small?: boolean;
   selected?: boolean;
   highlight?: boolean;
@@ -51,6 +51,7 @@ export function MahjongTile({
   onClick?: () => void;
   onHover?: (label: string | null) => void;
   disabled?: boolean;
+  feedbackId?: number;
 }) {
   const className = [
     'tile',
@@ -59,6 +60,7 @@ export function MahjongTile({
     highlight ? 'matching' : '',
     latest ? 'latest' : '',
     drawn ? 'drawn' : '',
+    feedbackId === undefined ? '' : 'feedback-target',
     tile.family,
   ]
     .filter(Boolean)
@@ -77,6 +79,7 @@ export function MahjongTile({
         aria-label={tile.label}
         title={tile.label}
         data-face={tile.label}
+        data-feedback-id={feedbackId}
       >
         {content}
       </span>

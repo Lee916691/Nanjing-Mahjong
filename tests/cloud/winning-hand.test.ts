@@ -58,11 +58,16 @@ it('records the winning rack once and only reveals the winner after settlement',
   const visible = view(room, 'p1', online, 'secret');
   const rack = visible.scores.find((s) => s.winningHand)?.winningHand;
   expect(rack?.concealed).toHaveLength(13);
-  expect(rack?.winningTile.id).toBe('wind-east-2');
-  expect(rack?.concealed.some((t) => t.id === 'wind-east-2')).toBe(false);
+  expect(rack?.winningTile).toEqual({ family: 'wind', label: '东' });
+  expect(JSON.stringify(rack)).not.toMatch(/"id"\s*:/);
+  expect(room.scores[0]!.winningHand!.winningTile.id).toBe('wind-east-2');
+  expect(room.scores[0]!.winningHand!.concealed.some((t) => t.id === 'wind-east-2')).toBe(false);
   expect(visible.players[0]?.hand).toBeUndefined();
   expect(visible.players[2]?.hand).toBeUndefined();
-  expect(JSON.parse(JSON.stringify(room)).scores[0].winningHand).toEqual(rack);
+  expect(
+    JSON.parse(JSON.stringify(room), (key, value) => (key === 'id' ? undefined : value)).scores[0]
+      .winningHand,
+  ).toEqual(rack);
   advance(room);
   const hand = room.match!.currentHandIndex;
   const token = reviewToken(room, 'secret');

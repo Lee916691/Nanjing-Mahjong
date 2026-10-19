@@ -570,12 +570,9 @@ function hasFinalTurnContinuation(result: HandResult, facts: HandProgressFacts):
         winner.evaluation.patterns.some((pattern) => pattern !== 'men-qing'),
     );
   return (
-    facts.selfDrawCount > 0 ||
     facts.followDiscardPenaltyCount > 0 ||
     facts.fourIdenticalDiscardsPenaltyCount > 0 ||
     facts.fourWindsGatheredCount > 0 ||
-    facts.successfulAnGangCount > 0 ||
-    facts.successfulMingOrBuGangCount >= 2 ||
     facts.flowerKongCount > 0 ||
     hasBigHand
   );

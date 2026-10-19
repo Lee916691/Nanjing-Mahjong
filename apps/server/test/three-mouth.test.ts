@@ -81,7 +81,7 @@ describe('three-mouth multiplayer integration', () => {
     expect(room.match!.currentHand.threeMouthState[1].status).toBe('active');
     expect(room.scores).toEqual([]);
   });
-  it('loads V1.0.8 without changing scores or pending responses, then uses V1.0.10 for a new match', () => {
+  it('loads V1.0.8 without changing scores or pending responses, then uses V1.0.11 for a new match', () => {
     const room = threeMouthRoom();
     room.rules = 'V1.0.8';
     room.match!.currentHand.legacyThreeMouth = true;
@@ -96,31 +96,42 @@ describe('three-mouth multiplayer integration', () => {
       room.match!.currentHand.reactionWindow,
     );
     start(restored);
-    expect(restored.rules).toBe('V1.0.10');
+    expect(restored.rules).toBe('V1.0.11');
     expect(restored.match!.currentHand.legacyThreeMouth).toBeUndefined();
   });
-  it('upgrades V1.0.9 room metadata without recalculating stored seven-pairs payments', () => {
-    const room = threeMouthRoom();
-    room.rules = 'V1.0.9';
-    room.scores = [
-      {
-        hand: 1,
-        reason: 'discard、men-qing、seven-pairs',
-        transfers: [{ from: 1, to: 0, amount: 148 }],
-        calculation: {
-          terms: [{ label: '七对', points: 50 }],
-          factors: [],
-          formula: '历史快照',
-          perPayment: 148,
-          payments: 1,
-          total: 148,
+  it.each(['V1.0.9', 'V1.0.10'] as const)(
+    'upgrades %s room metadata without changing stored history',
+    (version) => {
+      const room = threeMouthRoom();
+      room.rules = version;
+      room.scores = [
+        {
+          hand: 1,
+          reason: 'discard、men-qing、seven-pairs',
+          transfers: [{ from: 1, to: 0, amount: 148 }],
+          calculation: {
+            terms: [{ label: '七对', points: 50 }],
+            factors: [],
+            formula: '历史快照',
+            perPayment: 148,
+            payments: 1,
+            total: 148,
+          },
         },
-      },
-    ];
-    const before = structuredClone(room);
-    const restored = restoreRoomRules(JSON.parse(JSON.stringify(room)));
-    expect(restored.rules).toBe('V1.0.10');
-    expect(restored.match).toEqual(before.match);
-    expect(restored.scores).toEqual(before.scores);
-  });
+      ];
+      const before = structuredClone(room);
+      const restored = restoreRoomRules(JSON.parse(JSON.stringify(room)));
+      expect(restored).toEqual({ ...before, rules: 'V1.0.11' });
+      const store = new Store(':memory:');
+      try {
+        store.commit(restored);
+        expect(store.rooms()[0]).toEqual(restored);
+        expect(
+          store.db.prepare("SELECT value FROM metadata WHERE key='version'").get()?.value,
+        ).toBe('1:V1.0.11');
+      } finally {
+        store.close();
+      }
+    },
+  );
 });

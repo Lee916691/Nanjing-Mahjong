@@ -6,6 +6,21 @@ import type { RoomView, RoomEvent, RoomCommand, CommandAck } from '@nanjing-mahj
 import { MahjongTile as Tile } from './MahjongTile';
 import { MahjongTable } from './MahjongTable';
 import { ScoreDetails } from './ScoreDetails';
+import { TableNotification } from './TableNotification';
+import { collectTableNotices, createNotificationCursor } from './table-notifications';
+import type { TableNotice } from './table-notifications';
+import { TableHistory } from './TableHistory';
+import { updateTableHistory } from './table-history';
+import type { TableHistoryState } from './table-history';
+import { SoundToggle } from './SoundToggle';
+import {
+  collectTableFeedback,
+  createTableAudio,
+  readSoundMuted,
+  saveSoundMuted,
+  visualForEvent,
+} from './table-feedback';
+import type { TableFeedback } from './table-feedback';
 
 const seats = ['东', '南', '西', '北'];
 const labels: Record<string, string> = {
@@ -72,6 +87,55 @@ export function App() {
   const roomRef = useRef<RoomView | null>(null);
   const inFlight = useRef(false);
   const [retry, setRetry] = useState<{ event: RoomEvent; cmd: RoomCommand } | null>(null);
+  const notificationCursor = useRef(createNotificationCursor());
+  const feedbackCursor = useRef(createNotificationCursor());
+  const [soundMuted, setSoundMuted] = useState(readSoundMuted);
+  const audio = useRef<ReturnType<typeof createTableAudio> | null>(null);
+  if (!audio.current) audio.current = createTableAudio(soundMuted);
+  const [feedbackQueue, setFeedbackQueue] = useState<TableFeedback[]>([]);
+  const feedback = feedbackQueue[0];
+  function toggleSound() {
+    const next = !soundMuted;
+    audio.current?.activate();
+    audio.current?.setMuted(next);
+    setSoundMuted(next);
+    saveSoundMuted(next);
+  }
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = setTimeout(() => setFeedbackQueue((queue) => queue.slice(1)), 700);
+    return () => clearTimeout(timer);
+  }, [feedback]);
+  useEffect(() => {
+    const activate = () => audio.current?.activate();
+    const visibility = () => {
+      if (document.visibilityState !== 'visible') {
+        audio.current?.clear();
+        setFeedbackQueue([]);
+      }
+    };
+    document.addEventListener('pointerdown', activate);
+    document.addEventListener('keydown', activate);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      document.removeEventListener('pointerdown', activate);
+      document.removeEventListener('keydown', activate);
+      document.removeEventListener('visibilitychange', visibility);
+      audio.current?.clear();
+    };
+  }, []);
+  const [notifications, setNotifications] = useState<TableNotice[]>([]);
+  const [tableHistory, setTableHistory] = useState<TableHistoryState | null>(null);
+  const notification = notifications[0];
+  const notificationsBlocked = !connected || !!room?.paused || away || !!message || !!retry;
+  useEffect(() => {
+    if (!notification || notificationsBlocked) return;
+    const timer = setTimeout(
+      () => setNotifications((queue) => queue.slice(1)),
+      notification.duration,
+    );
+    return () => clearTimeout(timer);
+  }, [notification, notificationsBlocked]);
   useEffect(() => {
     roomRef.current = room;
   }, [room]);
@@ -90,14 +154,47 @@ export function App() {
         socket.on('connect', () => {
           setConnected(true);
           setMessage('');
+          // CloudSocket applies recovery synchronously, but filters an unchanged snapshot.
+          queueMicrotask(() => {
+            if (!disposed && notificationCursor.current.roomId === null && roomRef.current)
+              collectTableNotices(notificationCursor.current, roomRef.current);
+            if (!disposed && feedbackCursor.current.roomId === null && roomRef.current)
+              collectTableFeedback(feedbackCursor.current, roomRef.current);
+          });
         });
-        socket.on('disconnect', () => setConnected(false));
+        socket.on('disconnect', () => {
+          setConnected(false);
+          notificationCursor.current = createNotificationCursor();
+          feedbackCursor.current = createNotificationCursor();
+          audio.current?.clear();
+          setFeedbackQueue([]);
+          setNotifications([]);
+        });
         socket.on('connect_error', () => setMessage('连接失败，正在重试；请确认游戏服务已启动'));
         socket.on('session:replaced', () => {
           socket?.disconnect();
           setMessage('你的座位已在另一页面打开。关闭另一页面后刷新可接管。');
         });
         socket.on('room:state', (value: RoomView) => {
+          setTableHistory((previous) => updateTableHistory(previous, value));
+          const previous = roomRef.current;
+          if (
+            previous?.id !== value.id ||
+            (value.status === 'waiting' &&
+              previous.status !== 'waiting' &&
+              value.revision >= previous.revision)
+          ) {
+            setNotifications([]);
+            audio.current?.clear();
+            setFeedbackQueue([]);
+          }
+          const added = collectTableNotices(notificationCursor.current, value);
+          if (added.length) setNotifications((queue) => [...queue, ...added]);
+          const events = collectTableFeedback(feedbackCursor.current, value);
+          const visuals = events.flatMap((event) => visualForEvent(event, value) ?? []);
+          if (visuals.length && document.visibilityState === 'visible')
+            setFeedbackQueue((queue) => [...queue, ...visuals]);
+          audio.current?.enqueue(events);
           roomRef.current = value;
           setRoom(value);
           setRoomId(value.id);
@@ -107,6 +204,12 @@ export function App() {
           setMessage('房间已因 30 分钟无操作自动解散，可以创建或加入新房间。'),
         );
         socket.on('room:left', () => {
+          setTableHistory(null);
+          notificationCursor.current = createNotificationCursor();
+          feedbackCursor.current = createNotificationCursor();
+          audio.current?.clear();
+          setFeedbackQueue([]);
+          setNotifications([]);
           roomRef.current = null;
           setRoom(null);
           setAway(false);
@@ -215,9 +318,18 @@ export function App() {
           </nav>
         )}
         <span className={connected ? 'connection online' : 'connection'}>
-          {away ? '已暂离牌桌' : connected ? '已连接' : '连接中 / 已离线'}
+          {away
+            ? '已暂离牌桌'
+            : connected
+              ? '已连接'
+              : room
+                ? '正在重连并恢复房间状态'
+                : '正在连接服务'}
         </span>
       </header>
+      {(!room || room.status === 'waiting' || away) && (
+        <SoundToggle muted={soundMuted} onToggle={toggleSound} />
+      )}
       {message && (
         <div className="notice" role="status">
           {message}
@@ -268,7 +380,7 @@ export function App() {
               <b>02 · 开一将</b>
               <h2>四人准备，房主开局</h2>
               <p>
-                南京敞开头 V1.0.8。每人从 1000 分开始，一将按 16
+                南京敞开头 V1.0.11。每人从 1000 分开始，一将按 16
                 个有效庄次推进；连庄时手数与庄次不同。
               </p>
             </article>
@@ -471,7 +583,17 @@ export function App() {
               )}
               {finished ? (
                 <section className="final-panel">
-                  <h2>本将积分</h2>
+                  <SoundToggle muted={soundMuted} onToggle={toggleSound} />
+                  <TableNotification notice={notificationsBlocked ? undefined : notification} />
+                  <TableHistory key={room.id} history={tableHistory} />
+                  <h2>
+                    <span
+                      className={feedback?.kind === 'result' ? 'feedback-target' : undefined}
+                      data-feedback-id={feedback?.kind === 'result' ? feedback.id : undefined}
+                    >
+                      本将积分
+                    </span>
+                  </h2>
                   <div className="ranking">
                     {room.players
                       .filter((p) => p !== null)
@@ -517,10 +639,16 @@ export function App() {
                 </section>
               ) : (
                 <MahjongTable
+                  soundMuted={soundMuted}
+                  onToggleSound={toggleSound}
+                  feedback={notificationsBlocked ? undefined : feedback}
+                  history={tableHistory}
+                  notification={notificationsBlocked ? undefined : notification}
                   key={`${room.id}-${room.hand}`}
                   room={room}
                   connected={connected}
                   pending={pending}
+                  confirmationUnknown={Boolean(retry)}
                   onAction={(choice) => command('game:action', { token: choice.token })}
                   readable={readable}
                   onRoomOptions={() => setRoomOptions(true)}

@@ -623,7 +623,7 @@ describe('Di Hu final-turn and transactional boundaries', () => {
     expect(() => completeCurrentHand(completed)).toThrow(/must be playing/i);
   });
 
-  it('combines turn-16 self-draw and big-hand continuation into one completion', () => {
+  it('continues turn 16 once for self-drawn Di Hu as a big hand', () => {
     let match = declaredMatch([['wind-south-1'], standardWaitIds, [], []], [1], {
       headDraws: ['wind-east-2'],
     });

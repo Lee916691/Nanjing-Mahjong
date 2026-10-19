@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { CloudStore, LEASE_MS } from './store.js';
 import type { Session, CloudRoom, RequestContext } from './store.js';
 import { createRoom, events, execute, fail, parseCommand, PublicError, tick } from './commands.js';
-import { view } from '../apps/server/src/table.js';
+import { TableEventArchiveError, view } from '../apps/server/src/table.js';
 import type { CommandAck, RoomEvent, RoomView } from '@nanjing-mahjong/shared-types';
 
 export interface Env {
@@ -14,6 +14,10 @@ const headers = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'same-origin',
+};
+const eventArchiveError = {
+  code: 'ROOM_EVENT_ARCHIVE_INCOMPATIBLE',
+  message: '牌桌事件历史存档不兼容或已损坏，房间暂不可用，请联系管理员核查并修复存档。',
 };
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   Response.json(body, { status, headers: { ...headers, ...extra } });
@@ -255,8 +259,14 @@ function streamState(
           encoder.encode((serialized === last ? '{}' : JSON.stringify({ state })) + '\n'),
         );
         last = serialized;
-      } catch {
-        if (!canceled) controller.error(new Error('同步连接中断'));
+      } catch (error) {
+        if (error instanceof TableEventArchiveError) {
+          console.error('Cloud event archive rejected', error.kind);
+          if (!canceled) {
+            controller.enqueue(encoder.encode(JSON.stringify({ error: eventArchiveError }) + '\n'));
+            controller.close();
+          }
+        } else if (!canceled) controller.error(new Error('同步连接中断'));
       }
     },
     cancel() {
@@ -375,6 +385,10 @@ export default {
       }
       return json({ error: { code: 'NOT_FOUND', message: '接口不存在' } }, 404);
     } catch (error) {
+      if (error instanceof TableEventArchiveError) {
+        console.error('Cloud event archive rejected', error.kind);
+        return json({ error: eventArchiveError }, 503);
+      }
       if (error instanceof PublicError)
         return json({ error: { code: error.code, message: error.message } }, error.status);
       console.error('Cloud request failed', error instanceof Error ? error.message : 'unknown');

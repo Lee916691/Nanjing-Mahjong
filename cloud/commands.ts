@@ -147,6 +147,7 @@ export function execute(
       room.match = undefined;
       room.reactions = {};
       room.scores = [];
+      room.tableEvents = [];
       room.remainingMs = null;
       room.clockAt = null;
       room.epoch++;

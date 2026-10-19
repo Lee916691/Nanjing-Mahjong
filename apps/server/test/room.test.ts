@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import { Store } from '../src/store.js';
 import type { OrdinaryHandTile } from '@nanjing-mahjong/game-core';
+import { appendTableEvents, choices } from '../src/table.js';
+import { specialRuleRoom } from './event-fixture.js';
 
 const resources: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -80,6 +82,56 @@ async function table(url: string) {
   return { clients, roomId };
 }
 describe('authoritative room service', () => {
+  it.each(['flower-kong', 'four-winds-gathered', 'follow-discard'] as const)(
+    'commits %s with its receipt once and restores all public views after a failed write',
+    async (rule) => {
+      const app = await server();
+      const { clients, roomId } = await table(app.url);
+      const room = app.rooms.get(roomId)!;
+      room.match = specialRuleRoom(rule).match;
+      room.tableEvents = [];
+      app.store.commit(room);
+      const token = choices(room, 0, app.store.secret()).find(
+        (choice) => choice.view.kind === 'discard',
+      )!.view.token;
+      const args = { roomId, token, commandId: randomUUID() };
+      const before = structuredClone(room);
+      const row = app.store.db.prepare('SELECT * FROM rooms WHERE id=?').get(roomId);
+      app.store.db.exec(
+        "CREATE TRIGGER fail_special_write BEFORE INSERT ON commands BEGIN SELECT RAISE(ABORT,'failure'); END;",
+      );
+      expect((await send(clients[0]!.socket, 'game:action', args)).ok).toBe(false);
+      expect(app.rooms.get(roomId)).toEqual(before);
+      expect(app.store.db.prepare('SELECT * FROM rooms WHERE id=?').get(roomId)).toEqual(row);
+      expect(
+        app.store.db.prepare('SELECT * FROM commands WHERE id=?').get(args.commandId),
+      ).toBeUndefined();
+      app.store.db.exec('DROP TRIGGER fail_special_write');
+      const accepted = await send(clients[0]!.socket, 'game:action', args);
+      expect(accepted.ok).toBe(true);
+      expect(await send(clients[0]!.socket, 'game:action', args)).toEqual(accepted);
+      const saved = app.rooms.get(roomId)!;
+      expect(saved.tableEvents.filter((event) => event.type === 'special-rule-confirmed')).toEqual([
+        expect.objectContaining({ rule }),
+      ]);
+      await wait(() =>
+        clients.every(
+          (client) =>
+            client.state?.tableEvents.some(
+              (event) => event.type === 'special-rule-confirmed' && event.rule === rule,
+            ) ?? false,
+        ),
+      );
+      for (const client of clients) expect(client.state!.tableEvents).toEqual(saved.tableEvents);
+      expect(app.store.rooms().find((room) => room.id === roomId)!.tableEvents).toEqual(
+        saved.tableEvents,
+      );
+      const returning = await client(app.url, clients[0]!.cookie);
+      await wait(() => returning.state !== null);
+      expect(returning.state!.tableEvents).toEqual(saved.tableEvents);
+      expect(app.rooms.get(roomId)!.nextTableEventId).toBe(saved.nextTableEventId);
+    },
+  );
   it('creates four seats, rejects a fifth and isolates every hand', async () => {
     const app = await server();
     const { clients, roomId } = await table(app.url);
@@ -126,8 +178,18 @@ describe('authoritative room service', () => {
     const first = await send(player.socket, 'game:action', data);
     expect(first.ok).toBe(true);
     const epoch = app.rooms.get(roomId)!.epoch;
+    const eventState = structuredClone({
+      events: app.rooms.get(roomId)!.tableEvents,
+      id: app.rooms.get(roomId)!.nextTableEventId,
+      sequence: app.rooms.get(roomId)!.nextTableEventSequence,
+    });
     expect(await send(player.socket, 'game:action', data)).toEqual(first);
     expect(app.rooms.get(roomId)!.epoch).toBe(epoch);
+    expect({
+      events: app.rooms.get(roomId)!.tableEvents,
+      id: app.rooms.get(roomId)!.nextTableEventId,
+      sequence: app.rooms.get(roomId)!.nextTableEventSequence,
+    }).toEqual(eventState);
     expect((await send(player.socket, 'game:action', { roomId, token: action.token })).ok).toBe(
       false,
     );
@@ -156,6 +218,11 @@ describe('authoritative room service', () => {
     const receipt = await send(clients[actorIndex]!.socket, 'game:action', command);
     expect(receipt.ok).toBe(true);
     const saved = structuredClone(app.rooms.get(roomId)!.match);
+    const savedEvents = structuredClone(app.rooms.get(roomId)!.tableEvents);
+    const savedCounters = [
+      app.rooms.get(roomId)!.nextTableEventId,
+      app.rooms.get(roomId)!.nextTableEventSequence,
+    ];
     const cookies = clients.map((c) => c.cookie);
     for (const c of clients) c.socket.disconnect();
     await app.close();
@@ -164,6 +231,11 @@ describe('authoritative room service', () => {
     const returning = await Promise.all(cookies.map((cookie) => client(restored.url, cookie)));
     await wait(() => returning.every((c) => c.state?.paused === false));
     expect(restored.rooms.get(roomId)!.match).toEqual(saved);
+    expect(restored.rooms.get(roomId)!.tableEvents).toEqual(savedEvents);
+    expect([
+      restored.rooms.get(roomId)!.nextTableEventId,
+      restored.rooms.get(roomId)!.nextTableEventSequence,
+    ]).toEqual(savedCounters);
     expect(returning.map((c) => c.state?.self)).toEqual([0, 1, 2, 3]);
     expect(await send(returning[actorIndex]!.socket, 'game:action', command)).toEqual(receipt);
     expect(restored.rooms.get(roomId)!.match).toEqual(saved);
@@ -189,12 +261,20 @@ describe('authoritative room service', () => {
   it('any seated player may end, while only the host may start a rematch', async () => {
     const app = await server();
     const { clients, roomId } = await table(app.url);
+    const room = app.rooms.get(roomId)!;
+    appendTableEvents(room, [{ type: 'tile-drawn', hand: 1, seat: 0 }]);
+    const counters = [room.nextTableEventId, room.nextTableEventSequence];
     expect((await send(clients[1]!.socket, 'room:end', { roomId })).ok).toBe(true);
     expect((await send(clients[1]!.socket, 'room:rematch', { roomId })).ok).toBe(false);
     expect(app.rooms.get(roomId)!.status).toBe('ended');
     expect((await send(clients[0]!.socket, 'room:rematch', { roomId })).ok).toBe(true);
     expect(app.rooms.get(roomId)!.status).toBe('waiting');
     expect(app.rooms.get(roomId)!.members.every((m) => m?.ready === false)).toBe(true);
+    expect(app.rooms.get(roomId)!.tableEvents).toEqual([]);
+    expect([
+      app.rooms.get(roomId)!.nextTableEventId,
+      app.rooms.get(roomId)!.nextTableEventSequence,
+    ]).toEqual(counters);
   });
 });
 

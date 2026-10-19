@@ -41,6 +41,38 @@ For every rule change, update the rule document, then tests, then implementation
 
 Name tests `*.test.ts` under `packages/game-core/test/`; use Vitest `describe`, `it`, and `expect`. Cover legal actions, rejected actions, state transitions, and scoring consequences. No numeric coverage threshold is configured.
 
+## Documentation-First Development
+
+Any new feature, behavior change, data-structure change, interface change, or bug fix must begin by checking and creating or updating the relevant documentation before any test code or production code is changed. The documentation must state, at minimum:
+
+- the background and problem being solved;
+- expected behavior and boundary conditions;
+- affected modules and data flow;
+- existing behavior that must not change;
+- security, compatibility, and error-handling requirements;
+- acceptance criteria and the test plan.
+
+A small, narrowly scoped fix may use a brief change note in an existing relevant document; it does not require a separate long document.
+
+For every development task, Codex must work in this order:
+
+1. Check the existing requirement, architecture, rule, and development-guideline documents.
+2. Define the task scope and affected behavior.
+3. Update the relevant documentation before changing test code or production code.
+4. Implement code and tests from the documented requirements.
+5. Check the implementation against the documentation for divergence.
+6. At task completion, record actual completion status, test results, and unresolved issues.
+
+If requirements are ambiguous, architecture and documentation disagree, or a major design decision is required, stop implementation and report the issue rather than expanding the task scope without approval.
+
+The reverse order is prohibited: do not modify tests or production code first and add the requirements documentation afterward.
+
+Documentation acceptance criteria must be translatable into automated tests or explicit manual verification steps. If implementation reveals that the design is unsuitable, update the documentation before adjusting the code. Do not leave documentation describing obsolete behavior, change product rules merely to make tests pass, or mark tests as passed unless they were actually run.
+
+At the end of each development task, check whether affected requirement, architecture, and implementation-status documents need synchronization. Update only affected material; do not rewrite unrelated documents or create duplicate summary files.
+
+Keep each task within its explicitly requested development step. Do not implement later steps early or perform opportunistic broad refactors. A documentation-only task must not change business code, tests, build configuration, database migrations, or dependencies.
+
 ## Commit & Pull Request Guidelines
 
 Follow the history's Conventional Commit style, for example `feat(game-core): complete di-hu flow` or `fix(game-core): allow peng with three matching tiles`.

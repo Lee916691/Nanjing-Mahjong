@@ -231,6 +231,7 @@ export function createApp(options: {
                 room.match = undefined;
                 room.reactions = {};
                 room.scores = [];
+                room.tableEvents = [];
                 room.epoch++;
                 room.members.forEach((m) => {
                   if (m) m.ready = false;

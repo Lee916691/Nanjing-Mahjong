@@ -56,6 +56,7 @@ for (const selfDraw of [false, true]) {
       await actor.getByRole('button', { name: selfDraw ? '自摸胡' : '胡', exact: true }).click();
       for (const page of pages) {
         await expect(page.getByText('三嘴包子', { exact: false }).first()).toBeVisible();
+        await page.locator('.hand-score-details > summary').click();
         await expect(page.getByText(/由玩家0承包三份付款/).first()).toBeVisible();
       }
       await actor.screenshot({

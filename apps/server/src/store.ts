@@ -18,11 +18,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS commands(session TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL,
         PRIMARY KEY(session,id));`);
     const version = this.db.prepare("SELECT value FROM metadata WHERE key='version'").get();
-    if (version && !['1:V1.0.8', '1:V1.0.9', '1:V1.0.10'].includes(String(version.value))) {
+    if (
+      version &&
+      !['1:V1.0.8', '1:V1.0.9', '1:V1.0.10', '1:V1.0.11'].includes(String(version.value))
+    ) {
       this.db.close();
       throw new Error('存档版本不兼容，请使用对应版本恢复');
     }
-    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('version','1:V1.0.10')").run();
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES ('version','1:V1.0.11')").run();
     this.db
       .prepare("INSERT OR IGNORE INTO metadata VALUES ('secret',?)")
       .run(randomBytes(32).toString('hex'));
@@ -58,8 +61,8 @@ export class Store {
   commit(room: SavedRoom | undefined, session?: string, ack?: CommandAck): void {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      if (room?.rules === 'V1.0.10')
-        this.db.prepare("UPDATE metadata SET value='1:V1.0.10' WHERE key='version'").run();
+      if (room?.rules === 'V1.0.11')
+        this.db.prepare("UPDATE metadata SET value='1:V1.0.11' WHERE key='version'").run();
       if (room)
         this.db
           .prepare('INSERT OR REPLACE INTO rooms VALUES (?,?)')

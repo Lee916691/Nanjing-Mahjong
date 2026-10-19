@@ -265,8 +265,8 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - 抢补杠窗口全 Pass 后，Reducer 再次验证 intent，将原 Peng 在原位置升级为 BuGang：保留 `meldId`、前三张顺序、`claimedTileId` 和 `fromPlayerIndex`，末尾追加第四张，且不增加 `nextMeldSequence`。
 - 正式补杠成立时，RuleSet 生成由原点碰者向补杠者支付实际 20 分的 transfer 快照；随后复用明杠/暗杠的牌墙尾部补牌、连续补花和终局花事件抑制路径。
 - 抢补杠胡时第四张只从声明者暗手移除一次，原 Peng 保持不变；不产生补杠事件、不收补杠分、不尾补。声明者独自向每名赢家支付其单份胡牌分三份，并按敞开头比下胡生成最终快照。
-- `GameState.handProgressFacts` 保存结算队列清空后仍需用于庄家推进和第16局判断的最小 typed 局内事实。成功暗杠、成功直接明杠/补杠和实际成立的花杠在正式 gameplay 事件处累计；杠开、包子结算、自摸、两类罚分和四风归齐也有独立计数字段，以覆盖权威续庄决策。当前阶段尚无对应 action 的字段保持为零；新手牌全部归零，声明失败或终局抑制事件不计入。
-- `applyGameActionToMatch` 在同一次动作中结算胡牌、补杠和尾补花杠事件。`completeCurrentHand` 只接受已经 ended、具有完整合法 typed result 且局内事实合法的 hand，并从 result 与可信 facts 推导庄家推进；抢补杠、一炮多响、庄家胡和流局仍不过庄，第16有效庄家轮次再按权威八类额外条件决定续庄。
+- `GameState.handProgressFacts` 保存结算队列清空后的 typed 局内事实。成功暗杠、成功直接明杠/补杠和实际成立的花杠在正式 gameplay 事件处累计；杠开、包子结算、自摸、两类罚分和四风归齐也有独立计数字段。V1.0.11起自摸及成功暗杠、明杠/补杠的次数不再参与第16局续庄判断，但保留字段、累计与合法性校验以兼容存档；新手牌全部归零，声明失败或终局抑制事件不计入。
+- `applyGameActionToMatch` 在同一次动作中结算胡牌、补杠和尾补花杠事件。`completeCurrentHand` 只接受已经 ended、具有完整合法 typed result 且局内事实合法的 hand，并从 result 与可信 facts 推导庄家推进；抢补杠、一炮多响、庄家胡和流局仍不过庄，第16有效庄家轮次再按两种罚分、四风归齐、花杠和大牌五类额外条件决定续庄。
 - 当前可达状态下的自摸入口复用同一 Hu evaluator、Hu evaluation、`PendingHuScoringEvent`、`HandResult` 和 transfer settlement。未来进园子只需改变 RuleSet 事件时输出；当前阶段仍没有 UI 或网络响应计时器。
 
 ## 13. 当前可达状态下的自摸闭环
@@ -278,7 +278,7 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 - RuleSet 按来源互斥分类：直接杠尾为杠开；补花链未形成新花杠为花开；形成新花杠为杠开；初始庄家优先分类为天胡。花开与杠开不会同时出现在 evaluation 中。
 - `getAvailableSelfDrawHu` 与 `DECLARE_SELF_DRAW_HU` 共用同一候选验证边界。验证按 provenance 的实体 ID 从暗手只读副本中精确移除一次，将剩余牌作为 `concealedTiles`、该实体作为 `winningTile` 送入 evaluator，避免把已经在手中的自摸牌计算两次。
 - `SelfDrawWinHandResult` 只有一个 `winner`，不伪造 `payerPlayerIndex` 或 `winners` 数组。一个 `PendingSelfDrawHuScoringEvent` 保存 RuleSet 生成的全部付款 transfers；普通自摸由三家分别付款，天胡由三家各付1000。Settlement 仍只验证并执行 transfer 快照，不理解自摸公式或重建付款人。
-- 自摸 action 原子结束本局、清除 provenance、更新 `selfDrawCount`，杠开时同时更新 `gangKaiCount`。Match 在同一次 action 中结算事件；`completeCurrentHand` 从 typed result 与局内 facts 处理庄家自摸、闲家过庄、杠开不过庄和第16有效庄家轮次的任意自摸续庄。
+- 自摸 action 原子结束本局、清除 provenance、更新 `selfDrawCount`，杠开时同时更新 `gangKaiCount`。Match 在同一次 action 中结算事件；`completeCurrentHand` 从 typed result 与局内 facts 处理庄家自摸、闲家过庄、杠开不过庄和第16有效庄家轮次的大牌及其他续庄条件。闲家普通自摸仅平胡或门清平胡时不再独立续庄；花开、地胡自摸等按大牌判断，付款保持不变。
 - 摸到牌墙最后一张普通牌后，本局继续保持 `waiting-for-discard`，玩家可以自摸或弃牌。若弃牌则正常开放响应窗口；无人响应且牌墙为空后流局。补花链耗尽仍立即流局，最后一张终局花的花杠事件仍被抑制。
 
 ## 14. 三项特殊弃牌实时结算边界
@@ -332,4 +332,4 @@ Socket.IO 只负责传输事件，不负责裁判规则。
 ## 19. V1.0.10 七对计分纠正
 
 - 普通七对加分统一来自 `PATTERN_POINTS['seven-pairs'] = 40`，点炮、自摸、抢补杠、地胡叠加与网页逐项说明共用该表；龙七对保持100且不叠加普通七对。
-- V1.0.9房间加载时升级版本标记为V1.0.10，手牌、已收集响应、累计分数、历史付款和计分说明快照不重算。V1.0.8只保留三嘴流程兼容，更新后新生成的七对结算同样使用40。
+- V1.0.10修订时，V1.0.9房间加载升级版本标记，手牌、已收集响应、累计分数、历史付款和计分说明快照不重算。当前V1.0.11对V1.0.9/V1.0.10沿用只升级标记的读取方式，下一次未完成手牌的庄家推进使用规则第26章的新判断。V1.0.8只保留三嘴流程兼容，更新后新生成的七对结算同样使用40。

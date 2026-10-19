@@ -1,5 +1,14 @@
 import { test, expect } from '@playwright/test';
 
+test('the guide identifies the current rules and returns to room creation', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '玩法指南', exact: true }).click();
+  await expect(page.locator('.guide-panel')).toContainText('南京敞开头 V1.0.11');
+  await expect(page.locator('.guide-panel')).not.toContainText('V1.0.8');
+  await page.getByRole('button', { name: '去创建房间', exact: true }).click();
+  await expect(page.getByLabel('自定义房间号（可选）')).toBeVisible();
+});
+
 test('four friends can join, play, refresh, pause, and reconnect', async ({
   browser,
 }, testInfo) => {

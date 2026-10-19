@@ -1,5 +1,5 @@
 import { MahjongTile } from './MahjongTile';
-import type { PlayerGameView, ScoreLine } from '@nanjing-mahjong/shared-types';
+import type { PlayerGameView, PublicScoreLine } from '@nanjing-mahjong/shared-types';
 
 export function ScoreDetails({
   score,
@@ -7,7 +7,7 @@ export function ScoreDetails({
   readable,
   showHand = false,
 }: {
-  score: ScoreLine;
+  score: PublicScoreLine;
   players: (PlayerGameView | null)[];
   readable: (value: string) => string;
   showHand?: boolean;
@@ -34,8 +34,8 @@ export function ScoreDetails({
         <section className="winning-hand" aria-label="胡牌牌面">
           <div className="winning-rack">
             <div className="winning-group">
-              {score.winningHand.concealed.map((tile) => (
-                <MahjongTile key={tile.id} tile={tile} small />
+              {score.winningHand.concealed.map((tile, index) => (
+                <MahjongTile key={index} tile={tile} small />
               ))}
             </div>
             <div className="winning-tile">
@@ -48,8 +48,8 @@ export function ScoreDetails({
               <span className="rack-label">副露</span>
               {score.winningHand.melds.map((meld, i) => (
                 <div className="winning-group meld-group" key={i}>
-                  {meld.tiles.map((tile) => (
-                    <MahjongTile key={tile.id} tile={tile} small />
+                  {meld.tiles.map((tile, index) => (
+                    <MahjongTile key={index} tile={tile} small />
                   ))}
                 </div>
               ))}
@@ -59,8 +59,8 @@ export function ScoreDetails({
             <div className="winning-rack">
               <span className="rack-label">花牌</span>
               <div className="winning-group">
-                {score.winningHand.flowers.map((tile) => (
-                  <MahjongTile key={tile.id} tile={tile} small />
+                {score.winningHand.flowers.map((tile, index) => (
+                  <MahjongTile key={index} tile={tile} small />
                 ))}
               </div>
             </div>

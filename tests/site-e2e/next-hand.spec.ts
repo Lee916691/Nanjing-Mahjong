@@ -49,6 +49,11 @@ test('settlement button counts four confirmations and opens the next hand', asyn
         return page;
       }),
     );
+    // Native details stay open through ordinary snapshots and do not affect four confirmations.
+    for (const page of pages) {
+      await page.locator('.hand-score-details > summary').click();
+      await expect(page.locator('.hand-score-details')).toHaveAttribute('open');
+    }
     for (let i = 0; i < 3; i++) {
       await pages[i]!.getByRole('button', { name: /开始下一把/ }).click();
       await expect(pages[i]!.getByRole('button', { name: /已准备/ })).toBeDisabled();

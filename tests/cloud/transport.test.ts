@@ -1,10 +1,107 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { CloudSocket } from '../../apps/web/src/cloud-socket';
 import type { RoomView } from '@nanjing-mahjong/shared-types';
+import { apply, advance, view } from '../../apps/server/src/table';
+import { specialRuleRoom } from '../../apps/server/test/event-fixture';
+import {
+  collectTableNotices,
+  createNotificationCursor,
+} from '../../apps/web/src/table-notifications';
+import { updateTableHistory } from '../../apps/web/src/table-history';
+import type { TableHistoryState } from '../../apps/web/src/table-history';
+import { collectTableFeedback, soundForEvent } from '../../apps/web/src/table-feedback';
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+
+it.each([0, 1, 2, 3])(
+  'keeps authoritative feedback consistent through stream/poll recovery for seat %s',
+  async (seat) => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', { sendBeacon: vi.fn() });
+    const room = specialRuleRoom('four-winds-gathered');
+    const snapshot = () =>
+      view(room, `p${seat}`, new Set(['p0', 'p1', 'p2', 'p3']), 'transport-fixture');
+    const initial = snapshot();
+    apply(room, { type: 'DISCARD_TILE', tileId: 'wind-north-1' });
+    advance(room);
+    room.revision++;
+    const confirmed = snapshot();
+    let current = confirmed;
+    let push!: ReadableStreamDefaultController<Uint8Array>;
+    let streams = 0;
+    let polls = 0;
+    const encode = (state: RoomView) => new TextEncoder().encode(JSON.stringify({ state }) + '\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((path: string) => {
+        if (path === '/api/connect') return Promise.resolve(Response.json({ state: initial }));
+        if (path === '/api/poll') {
+          polls++;
+          return Promise.resolve(Response.json({ state: current }));
+        }
+        streams++;
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                if (streams === 1) {
+                  push = controller;
+                  controller.enqueue(encode(confirmed));
+                  controller.enqueue(encode(confirmed));
+                } else {
+                  controller.enqueue(encode(confirmed));
+                  controller.enqueue(encode(current));
+                  controller.close();
+                }
+              },
+            }),
+            { headers: { 'Content-Type': 'application/x-ndjson' } },
+          ),
+        );
+      }),
+    );
+    const notices = createNotificationCursor();
+    const feedback = createNotificationCursor();
+    const noticeIds: number[] = [];
+    const feedbackIds: number[] = [];
+    const sounds: string[] = [];
+    let history: TableHistoryState | null = null;
+    const socket = new CloudSocket();
+    socket.on('room:state', (state) => {
+      noticeIds.push(...collectTableNotices(notices, state).map((notice) => notice.id));
+      const events = collectTableFeedback(feedback, state);
+      feedbackIds.push(...events.map((event) => event.id));
+      sounds.push(...events.flatMap((event) => soundForEvent(event) ?? []));
+      history = updateTableHistory(history, state);
+    });
+    try {
+      socket.connect();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(noticeIds).toEqual([1, 2]);
+      expect(sounds).toEqual(['special']);
+      push.error(new Error('stream interrupted'));
+      await vi.advanceTimersByTimeAsync(0);
+      apply(room, { type: 'DISCARD_TILE', tileId: 'tong-9-4' });
+      advance(room);
+      room.revision++;
+      current = snapshot();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(polls).toBeGreaterThan(0);
+      expect(noticeIds).toEqual([1, 2, 5]);
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(streams).toBeGreaterThan(1);
+      expect(noticeIds).toEqual([1, 2, 5]);
+      expect(feedbackIds).toEqual(noticeIds);
+      expect(sounds).toEqual(['special']);
+      expect(history!.records.map((record) => record.id)).toEqual(noticeIds);
+      expect(history!.records[1]!.text).toBe('玩家0（东位）四风归齐成立');
+    } finally {
+      socket.disconnect();
+    }
+  },
+);
 it('sends actions while a poll is slow and ignores that stale poll after acknowledgment', async () => {
   vi.useFakeTimers();
   vi.stubGlobal('navigator', { sendBeacon: vi.fn() });

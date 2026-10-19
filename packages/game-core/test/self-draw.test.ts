@@ -1672,21 +1672,91 @@ describe('current-reachable self-draw Hu flow', () => {
     expect(nonDealerMatch.completedHands[0]?.reason).toBe('normal-dealer-advance');
   });
 
-  it('uses selfDrawCount to continue the 16th effective dealer turn', () => {
+  it.each([false, true])(
+    'ends turn 16 after ordinary non-dealer self-draw, Men Qing=%s',
+    (menQing) => {
+      const base = waitingForDrawState([ordinary(winningTileId), ordinary('wan-9-4')]);
+      const state: GameState = {
+        ...base,
+        players: base.players.map((player, index) => ({
+          ...player,
+          hand:
+            index === 1
+              ? standardWait.filter((id) => menQing || !id.startsWith('tiao-')).map(ordinary)
+              : [],
+          flowers:
+            index === 1
+              ? (menQing
+                  ? ['season-spring-1']
+                  : ['season-spring-1', 'flower-plum-1', 'flower-red-center-1', 'flower-fortune-1']
+                ).map((id) => flower(id as TileId))
+              : [],
+          melds:
+            index === 1 && !menQing
+              ? [
+                  {
+                    id: 'peng-1',
+                    type: 'peng',
+                    tiles: [1, 2, 3].map((copy) => ordinary(`tiao-1-${copy}` as TileId)),
+                    claimedTileId: 'tiao-1-3',
+                    fromPlayerIndex: 0,
+                  },
+                ]
+              : [],
+        })),
+        currentPlayerIndex: 1,
+        pendingAction: { playerIndex: 1, seat: 'south', type: 'draw' },
+        handProgressFacts: {
+          ...base.handProgressFacts,
+          successfulAnGangCount: 1,
+          successfulMingOrBuGangCount: 2,
+        },
+      };
+      let match: MatchState = {
+        ...createMatch(),
+        status: 'playing',
+        effectiveDealerTurn: 16,
+        isFinalDealerTurn: true,
+        currentHandStatus: 'playing',
+        currentHand: state,
+      };
+      match = applyGameActionToMatch(match, { type: 'DRAW_TILE' });
+      expect(getAvailableSelfDrawHu(match.currentHand, 1)?.evaluation.patterns).toEqual(
+        menQing ? ['men-qing'] : [],
+      );
+      match = applyGameActionToMatch(match, { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 1 });
+      expect(match.currentHand.handProgressFacts).toMatchObject({
+        selfDrawCount: 1,
+        successfulAnGangCount: 1,
+        successfulMingOrBuGangCount: 2,
+      });
+      const amount = menQing ? 48 : 40;
+      expect(match.cumulativeScores).toEqual([
+        1000 - amount,
+        1000 + amount * 3,
+        1000 - amount,
+        1000 - amount,
+      ]);
+      const completed = completeCurrentHand(match);
+      expect(completed.status).toBe('completed');
+      expect(completed.dealerIndex).toBe(1);
+      expect(completed.completedHands[0]?.reason).toBe('normal-dealer-advance');
+      expect(completed.cumulativeScores).toEqual(match.cumulativeScores);
+      expect(completed.currentHand.handProgressFacts).toEqual(match.currentHand.handProgressFacts);
+    },
+  );
+
+  it('keeps the dealer on turn 16 after ordinary dealer self-draw', () => {
     const base = waitingForDrawState([ordinary(winningTileId), ordinary('wan-9-4')]);
-    const state: GameState = {
+    const state = {
       ...base,
-      players: base.players.map((player, index) => ({
-        ...player,
-        hand: index === 1 ? standardWait.map(ordinary) : [],
-      })),
-      currentPlayerIndex: 1,
-      pendingAction: { playerIndex: 1, seat: 'south', type: 'draw' },
+      players: base.players.map((player, index) =>
+        index === 0 ? { ...player, flowers: [flower('season-spring-1')] } : player,
+      ),
     };
-    const resolved = applyAction(applyAction(state, { type: 'DRAW_TILE' }), {
-      type: 'DECLARE_SELF_DRAW_HU',
-      playerIndex: 1,
-    });
+    const drawn = applyAction(state, { type: 'DRAW_TILE' });
+    expect(getAvailableSelfDrawHu(drawn, 0)?.evaluation.patterns).toEqual(['men-qing']);
+    const resolved = applyAction(drawn, { type: 'DECLARE_SELF_DRAW_HU', playerIndex: 0 });
     const completed = completeCurrentHand({
       ...createMatch(),
       status: 'playing',
@@ -1695,11 +1765,56 @@ describe('current-reachable self-draw Hu flow', () => {
       currentHandStatus: 'playing',
       currentHand: resolved,
     });
-
-    expect(resolved.handProgressFacts.selfDrawCount).toBe(1);
+    expect(completed.status).toBe('playing');
     expect(completed.dealerIndex).toBe(0);
-    expect(completed.completedHands[0]?.reason).toBe('final-turn-continuation');
+    expect(completed.completedHands[0]?.reason).toBe('dealer-win');
   });
+
+  it.each(['wall-head', 'flower-replacement'] as const)(
+    'continues turn 16 for a big-hand self-draw from %s',
+    (source) => {
+      const base = waitingForDrawState(
+        source === 'wall-head'
+          ? [ordinary(winningTileId), ordinary('wan-9-4')]
+          : [flower('season-spring-1'), ordinary('wan-9-4'), ordinary(winningTileId)],
+      );
+      const state: GameState = {
+        ...base,
+        players: base.players.map((player, index) => ({
+          ...player,
+          hand: index === 1 ? standardWait.map(ordinary) : [],
+        })),
+        currentPlayerIndex: 1,
+        pendingAction: { playerIndex: 1, seat: 'south', type: 'draw' },
+      };
+      const resolved = applyAction(applyAction(state, { type: 'DRAW_TILE' }), {
+        type: 'DECLARE_SELF_DRAW_HU',
+        playerIndex: 1,
+      });
+      expect(resolved.result).toMatchObject({
+        type: 'win',
+        source: 'self-draw',
+        winner: {
+          evaluation: {
+            patterns: expect.arrayContaining([source === 'wall-head' ? 'no-flower' : 'hua-kai']),
+          },
+        },
+      });
+      const completed = completeCurrentHand({
+        ...createMatch(),
+        status: 'playing',
+        effectiveDealerTurn: 16,
+        isFinalDealerTurn: true,
+        currentHandStatus: 'playing',
+        currentHand: resolved,
+      });
+
+      expect(resolved.handProgressFacts.selfDrawCount).toBe(1);
+      expect(completed.status).toBe('playing');
+      expect(completed.dealerIndex).toBe(0);
+      expect(completed.completedHands[0]?.reason).toBe('final-turn-continuation');
+    },
+  );
 
   it('preserves the exact state on an invalid or repeated declaration', () => {
     const drawn = applyAction(waitingForDrawState([ordinary(winningTileId), ordinary('wan-9-4')]), {
